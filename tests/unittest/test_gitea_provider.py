@@ -818,6 +818,37 @@ class TestGiteaProviderPublishInlineComments:
         assert kwargs['event'] == 'COMMENT'
         assert kwargs['event'] not in ('APPROVED', 'REQUEST_CHANGES')
 
+    def test_publish_code_suggestions_reports_success(self):
+        """The /improve caller retries when this returns falsy, so success must
+        return True to avoid duplicate inline suggestion reviews."""
+        provider = self._provider()
+        provider.publish_inline_comments = MagicMock()
+
+        result = provider.publish_code_suggestions([{
+            'body': 'try this\n```suggestion\nx\n```',
+            'relevant_file': 'a.py',
+            'relevant_lines_start': 3,
+            'original_suggestion': {
+                'suggestion_content': 'Use x',
+                'relevant_lines_start': 3,
+            },
+        }])
+
+        assert result is True
+        provider.publish_inline_comments.assert_called_once_with(
+            [{'body': 'try this\n```suggestion\nx\n```', 'path': 'a.py', 'old_position': 3, 'new_position': 3}],
+            '**Suggestion:** Use x',
+        )
+
+    def test_publish_code_suggestions_returns_false_without_valid_body(self):
+        provider = self._provider()
+        provider.publish_inline_comments = MagicMock()
+
+        result = provider.publish_code_suggestions([{'relevant_file': 'a.py'}])
+
+        assert result is False
+        provider.publish_inline_comments.assert_not_called()
+
 
 class TestGiteaProviderLabels:
     """Tests for get_repo_labels + name-based publish_labels.

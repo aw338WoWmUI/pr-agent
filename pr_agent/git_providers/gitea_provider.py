@@ -553,6 +553,7 @@ class GiteaProvider(GitProvider):
 
     def publish_code_suggestions(self, suggestions: List[Dict[str, Any]]):
         """Publish code suggestions"""
+        published = False
         for suggestion in suggestions:
             body = suggestion.get("body","")
             if not body:
@@ -569,6 +570,8 @@ class GiteaProvider(GitProvider):
                 self.publish_inline_comments([payload],title_body)
             else:
                 self.publish_inline_comments([payload])
+            published = True
+        return published
 
     def add_eyes_reaction(self, issue_comment_id: int, disable_eyes: bool = False) -> Optional[int]:
         """Add eyes reaction to a comment"""
