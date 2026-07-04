@@ -93,11 +93,13 @@ class GiteaProvider(GitProvider):
             self.sha = self.pr.head.sha if self.pr.head.sha else ""
             self.__add_file_content()
             self.__add_file_diff()
-            self.pr_commits = self.repo_api.list_all_commits(
+            self.pr_commits = self.repo_api.get_pr_commits(
                 owner=self.owner,
-                repo=self.repo
+                repo=self.repo,
+                pr_number=self.pr_number
             )
-            self.last_commit = self.pr_commits[-1]
+            self.pr_commits = [self._as_commit(c) for c in (self.pr_commits or [])]
+            self.last_commit = self.pr_commits[-1] if self.pr_commits else self._as_commit({"sha": self.sha})
             self.last_commit_id = self.last_commit
             self.base_sha = self.pr.base.sha if self.pr.base.sha else ""
             self.base_ref = self.pr.base.ref if self.pr.base.ref else ""
@@ -238,7 +240,15 @@ class GiteaProvider(GitProvider):
         return self.issue_url
 
     def get_latest_commit_url(self) -> str:
-        return self.last_commit.html_url
+        commit = getattr(self, "last_commit", None) or getattr(self, "last_commit_id", None)
+        html_url = getattr(commit, "html_url", None)
+        if html_url:
+            return html_url
+
+        sha = getattr(commit, "sha", None) or getattr(self, "sha", "")
+        if not sha:
+            return ""
+        return f"{self.base_url}/{self.owner}/{self.repo}/commit/{sha}"
 
     def get_comment_url(self, comment) -> str:
         return comment.html_url
@@ -837,7 +847,11 @@ class GiteaProvider(GitProvider):
         date = _parse_date(author.get("date"))
         author_ns = SimpleNamespace(date=date, name=author.get("name", ""))
         commit_ns = SimpleNamespace(author=author_ns, message=commit_obj.get("message", ""))
-        return SimpleNamespace(sha=commit.get("sha", ""), commit=commit_ns)
+        return SimpleNamespace(
+            sha=commit.get("sha", ""),
+            html_url=commit.get("html_url", ""),
+            commit=commit_ns
+        )
 
     def _get_file_content_from_base(self, filename: str) -> str:
         return self.repo_api.get_file_content(

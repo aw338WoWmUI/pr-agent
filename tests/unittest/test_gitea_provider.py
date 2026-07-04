@@ -1,4 +1,5 @@
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,6 +9,62 @@ from pr_agent.git_providers.gitea_provider import GiteaProvider
 
 
 class TestGiteaProvider:
+    @patch('pr_agent.git_providers.gitea_provider.get_settings')
+    @patch('pr_agent.git_providers.gitea_provider.giteapy.ApiClient')
+    @patch('pr_agent.git_providers.gitea_provider.RepoApi')
+    def test_gitea_provider_uses_pr_commits_for_latest_commit(self, mock_repo_api_cls, mock_api_client_cls, mock_get_settings):
+        settings = MagicMock()
+        settings.get.side_effect = lambda k, d=None: {
+            'GITEA.URL': 'https://gitea.example.com',
+            'GITEA.PERSONAL_ACCESS_TOKEN': 'test-token',
+            'GITEA.REPO_SETTING': None,
+            'GITEA.SKIP_SSL_VERIFICATION': False,
+            'GITEA.SSL_CA_CERT': None,
+        }.get(k, d)
+        mock_get_settings.return_value = settings
+
+        repo_api = mock_repo_api_cls.return_value
+        repo_api.get_pull_request.return_value = SimpleNamespace(
+            head=SimpleNamespace(sha='pr-head'),
+            base=SimpleNamespace(sha='base-sha', ref='dev'),
+            merge_base='merge-base',
+        )
+        repo_api.get_change_file_pull_request.return_value = []
+        repo_api.get_pull_request_diff.return_value = ''
+        repo_api.get_pr_commits.return_value = [
+            {
+                'sha': 'old-pr-sha',
+                'html_url': 'https://gitea.example.com/owner/repo/commit/old-pr-sha',
+                'commit': {'author': {'date': '2024-01-01T00:00:00Z'}, 'message': 'old'},
+            },
+            {
+                'sha': 'pr-head',
+                'html_url': 'https://gitea.example.com/owner/repo/commit/pr-head',
+                'commit': {'author': {'date': '2024-01-02T00:00:00Z'}, 'message': 'head'},
+            },
+        ]
+
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider('https://gitea.example.com/owner/repo/pulls/123')
+
+        repo_api.get_pr_commits.assert_called_once_with(owner='owner', repo='repo', pr_number=123)
+        repo_api.list_all_commits.assert_not_called()
+        assert provider.last_commit.sha == 'pr-head'
+        assert provider.get_latest_commit_url() == 'https://gitea.example.com/owner/repo/commit/pr-head'
+
+    def test_get_latest_commit_url_falls_back_to_pr_sha(self):
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.base_url = 'https://gitea.example.com'
+        provider.owner = 'owner'
+        provider.repo = 'repo'
+        provider.sha = 'headsha'
+        provider.last_commit = SimpleNamespace(sha='headsha')
+
+        assert provider.get_latest_commit_url() == 'https://gitea.example.com/owner/repo/commit/headsha'
+
     @patch('pr_agent.git_providers.gitea_provider.get_settings')
     @patch('pr_agent.git_providers.gitea_provider.giteapy.ApiClient')
     def test_gitea_provider_auth_header(self, mock_api_client_cls, mock_get_settings):
@@ -633,10 +690,11 @@ class TestGiteaProviderSubmitReview:
         return provider
 
     def test_submit_review_passes_event_and_omits_commit_id(self):
-        """``submit_review`` must NOT pin ``commit_id``: ``self.last_commit`` is
-        the repo/default-branch head (from ``repo_get_all_commits``), not the PR
-        head, so pinning it anchors the review to the wrong sha. Omitting it lets
-        Gitea default to the PR head."""
+        """``submit_review`` must NOT pin ``commit_id``.
+
+        Omitting it lets Gitea default to the current PR head and avoids stale
+        explicit commit IDs after force-pushes.
+        """
         provider = self._provider()
 
         assert provider.submit_review('COMMENT', body='please look') is True
@@ -743,7 +801,7 @@ class TestGiteaProviderPublishInlineComments:
         assert kwargs['body'] == 'Suggestion body'
         assert kwargs['comments'] == comments
         assert kwargs['pr_number'] == 42
-        # commit_id must NOT be pinned (self.last_commit is the wrong sha).
+        # commit_id must NOT be pinned; Gitea defaults it to the current PR head.
         assert 'commit_id' not in kwargs
         # The old PENDING-draft path must no longer be used.
         provider.repo_api.create_inline_comment.assert_not_called()
