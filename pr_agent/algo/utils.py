@@ -749,11 +749,27 @@ def _fix_key_value(key: str, value: str):
     return key, value
 
 
+def _has_expected_first_key(data: Any, first_key: str) -> bool:
+    if not first_key or not isinstance(data, dict):
+        return True
+    return first_key in data
+
+
 def load_yaml(response_text: str, keys_fix_yaml: List[str] = [], first_key="", last_key="") -> dict:
     response_text_original = copy.deepcopy(response_text)
     response_text = response_text.strip('\n').removeprefix('yaml').removeprefix('```yaml').rstrip().removesuffix('```')
     try:
         data = yaml.safe_load(response_text)
+        if not _has_expected_first_key(data, first_key):
+            get_logger().warning(f"Parsed AI prediction without expected root key '{first_key}', trying fallbacks")
+            data = try_fix_yaml(response_text, keys_fix_yaml=keys_fix_yaml, first_key=first_key, last_key=last_key,
+                                response_text_original=response_text_original)
+            if not data:
+                get_logger().error(f"Failed to parse AI prediction after fallbacks",
+                                   artifact={'response_text': response_text})
+            else:
+                get_logger().info(f"Successfully parsed AI prediction after fallbacks",
+                                  artifact={'response_text': response_text})
     except Exception as e:
         get_logger().warning(f"Initial failure to parse AI prediction: {e}")
         data = try_fix_yaml(response_text, keys_fix_yaml=keys_fix_yaml, first_key=first_key, last_key=last_key,
@@ -788,8 +804,9 @@ def try_fix_yaml(response_text: str,
                                                                                   f'{key} |\n        ')
     try:
         data = yaml.safe_load('\n'.join(response_text_lines_copy))
-        get_logger().info(f"Successfully parsed AI prediction after adding |-\n")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after adding |-\n")
+            return data
     except:
         pass
 
@@ -798,8 +815,9 @@ def try_fix_yaml(response_text: str,
     response_text_copy = response_text_copy.replace('|\n', '|2\n')
     try:
         data = yaml.safe_load(response_text_copy)
-        get_logger().info(f"Successfully parsed AI prediction after replacing | with |2")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after replacing | with |2")
+            return data
     except:
         # if it fails, we can try to add spaces to the lines that are not indented properly, and contain '}'.
         response_text_lines_copy = response_text_copy.split('\n')
@@ -809,8 +827,9 @@ def try_fix_yaml(response_text: str,
                 response_text_lines_copy[i] = '    ' + response_text_lines_copy[i].lstrip()
         try:
             data = yaml.safe_load('\n'.join(response_text_lines_copy))
-            get_logger().info(f"Successfully parsed AI prediction after replacing | with |2 and adding spaces")
-            return data
+            if _has_expected_first_key(data, first_key):
+                get_logger().info(f"Successfully parsed AI prediction after replacing | with |2 and adding spaces")
+                return data
         except:
             pass
 
@@ -824,8 +843,9 @@ def try_fix_yaml(response_text: str,
         snippet_text = snippet.group(2)
         try:
             data = yaml.safe_load(snippet_text)
-            get_logger().info(f"Successfully parsed AI prediction after extracting yaml snippet")
-            return data
+            if _has_expected_first_key(data, first_key):
+                get_logger().info(f"Successfully parsed AI prediction after extracting yaml snippet")
+                return data
         except Exception as e:
             get_logger().debug(f"Failed to parse AI prediction after extracting yaml snippet: {e}")
 
@@ -834,8 +854,9 @@ def try_fix_yaml(response_text: str,
     response_text_copy = response_text.strip().rstrip().removeprefix('{').removesuffix('}').rstrip(':\n')
     try:
         data = yaml.safe_load(response_text_copy)
-        get_logger().info(f"Successfully parsed AI prediction after removing curly brackets")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after removing curly brackets")
+            return data
     except:
         pass
 
@@ -855,8 +876,9 @@ def try_fix_yaml(response_text: str,
         if response_text_copy:
             try:
                 data = yaml.safe_load(response_text_copy)
-                get_logger().info(f"Successfully parsed AI prediction after extracting yaml snippet")
-                return data
+                if _has_expected_first_key(data, first_key):
+                    get_logger().info(f"Successfully parsed AI prediction after extracting yaml snippet")
+                    return data
             except:
                 pass
 
@@ -867,8 +889,9 @@ def try_fix_yaml(response_text: str,
             response_text_lines_copy[i] = ' ' + response_text_lines_copy[i][1:]
     try:
         data = yaml.safe_load('\n'.join(response_text_lines_copy))
-        get_logger().info(f"Successfully parsed AI prediction after removing leading '+'")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after removing leading '+'")
+            return data
     except:
         pass
 
@@ -878,8 +901,9 @@ def try_fix_yaml(response_text: str,
         response_text_copy = response_text_copy.replace('\t', '    ')
         try:
             data = yaml.safe_load(response_text_copy)
-            get_logger().info(f"Successfully parsed AI prediction after replacing tabs with spaces")
-            return data
+            if _has_expected_first_key(data, first_key):
+                get_logger().info(f"Successfully parsed AI prediction after replacing tabs with spaces")
+                return data
         except:
             pass
 
@@ -901,8 +925,9 @@ def try_fix_yaml(response_text: str,
     response_text_copy = response_text_copy.replace(' |\n', ' |2\n')
     try:
         data = yaml.safe_load(response_text_copy)
-        get_logger().info(f"Successfully parsed AI prediction after adding indent for sections of code blocks")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after adding indent for sections of code blocks")
+            return data
     except:
         pass
 
@@ -911,8 +936,9 @@ def try_fix_yaml(response_text: str,
     response_text_copy = response_text_copy.lstrip('|\n')
     try:
         data = yaml.safe_load(response_text_copy)
-        get_logger().info(f"Successfully parsed AI prediction after removing pipe chars")
-        return data
+        if _has_expected_first_key(data, first_key):
+            get_logger().info(f"Successfully parsed AI prediction after removing pipe chars")
+            return data
     except:
         pass
 
@@ -921,7 +947,7 @@ def try_fix_yaml(response_text: str,
     for encoding in encodings_to_try:
         try:
             data = yaml.safe_load(response_text.encode(encoding).decode("utf-8"))
-            if data:
+            if data and _has_expected_first_key(data, first_key):
                 get_logger().info(f"Successfully parsed AI prediction after decoding with {encoding} encoding")
                 return data
         except:

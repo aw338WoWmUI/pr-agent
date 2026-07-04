@@ -47,3 +47,27 @@ PR Feedback:
 
         expected_output = [{'relevant file': 'src/app.py:\n', 'suggestion content': 'The print statement is outside inside the if __name__ ==:'}]
         assert load_yaml(yaml_str) == expected_output
+
+    def test_load_expected_root_when_model_prefix_swallowed_review_key(self):
+        yaml_str = '''\
+I'll inspect the affected code paths to verify the behavior against the project context.review:
+  security_concerns: |
+    SECURITY_CONCERN: NO no concern
+  blocking_issues: |
+    BLOCKING_ISSUES: YES one blocking issue
+  key_issues_to_review:
+    - issue_header: |
+        [BLOCKING] stale review flag
+      issue_content: |
+        Generated release notes can inherit a stale reviewed flag.
+'''
+
+        data = load_yaml(
+            yaml_str,
+            first_key="review",
+            last_key="security_concerns",
+        )
+
+        assert "review" in data
+        assert data["review"]["security_concerns"].startswith("SECURITY_CONCERN: NO")
+        assert data["review"]["blocking_issues"].startswith("BLOCKING_ISSUES: YES")
