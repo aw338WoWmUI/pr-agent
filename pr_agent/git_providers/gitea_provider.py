@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from types import SimpleNamespace
@@ -1171,16 +1172,195 @@ class GiteaProvider(GitProvider):
         """Get the ID of the authenticated user"""
         return f"{self.pr.user.id}" if self.pr else ""
 
+    def get_pr_file_content(self, file_path: str, branch: str) -> str:
+        """Return the raw text of a file on a given branch (or "" if absent).
+
+        Public counterpart of the private ``_get_pr_file_content`` plumbing, and
+        the read half of the ``/update_changelog`` flow
+        (``pr_update_changelog.py`` calls it directly to load the existing
+        CHANGELOG). Mirrors GithubProvider.get_pr_file_content, which swallows
+        any error to "". Gitea serves this via ``GET /repos/{owner}/{repo}/raw/
+        {filepath}?ref=`` where ``?ref=`` accepts a branch name as well as a sha.
+        """
+        try:
+            return self.repo_api.get_file_content(
+                owner=self.owner,
+                repo=self.repo,
+                commit_sha=branch,
+                filepath=file_path,
+            ) or ""
+        except Exception as e:
+            self.logger.error(f"Error getting file content for {file_path}@{branch}: {e}")
+            return ""
+
+    def create_or_update_pr_file(self, file_path: str, branch: str,
+                                 contents: str = "", message: str = "") -> None:
+        """Create or update a file on ``branch`` (the write half of
+        ``/update_changelog`` when ``push_changelog_changes=true``).
+
+        Mirrors GithubProvider.create_or_update_pr_file: look up the file's
+        current blob sha (present => update, absent => create), then commit the
+        new content on ``branch``.
+
+        Two Gitea-specific gotchas handled here that PyGithub hid for the GitHub
+        provider:
+
+        1. Content must be **base64-encoded** in the request body — Gitea's
+           create/update-file endpoints (``CreateFileOptions`` /
+           ``UpdateFileOptions``) expect ``content`` as base64, whereas PyGithub
+           base64-encodes for you.
+        2. An update needs the existing file's **blob sha** (``ContentsResponse.
+           sha`` from ``GET .../contents/{path}``), which is a blob sha, *not* a
+           commit sha. A create must omit ``sha``.
+
+        Failures are logged and swallowed (matching the review-flow helpers) so a
+        push failure never breaks the surrounding tool; the caller falls back to
+        publishing the changelog as a comment.
+        """
+        try:
+            content_b64 = base64.b64encode(
+                contents.encode("utf-8") if isinstance(contents, str) else contents
+            ).decode("utf-8")
+            sha = self.repo_api.get_file_blob_sha(
+                owner=self.owner, repo=self.repo, filepath=file_path, ref=branch
+            )
+            self.repo_api.create_or_update_file(
+                owner=self.owner,
+                repo=self.repo,
+                filepath=file_path,
+                branch=branch,
+                content_b64=content_b64,
+                message=message,
+                sha=sha,
+            )
+            self.logger.info(
+                f"{'Updated' if sha else 'Created'} {file_path} on branch {branch}"
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to create/update {file_path} on {branch}: {e}")
+
     def is_supported(self, capability) -> bool:
         """Report whether a capability is available.
 
         Mirrors GithubProvider: in restricted mode the provider must not claim
         it can push code, so callers skip operations that need elevated
         permissions instead of failing at the API.
+
+        ``publish_file_comments`` is reported as *unsupported*: Gitea has no
+        ``subject_type=='file'`` diff-view comment (GitHub-only), so this
+        provider does not implement ``publish_file_comments``. Returning False
+        matches GitLab (which also lacks it) and, crucially, closes a latent
+        AttributeError: ``pr_description.py`` only calls the missing method when
+        ``is_supported("publish_file_comments")`` is True *and*
+        ``inline_file_summary`` is set — without this guard, a user setting
+        ``pr_description.inline_file_summary=true`` would reach a method that
+        does not exist.
         """
         if capability == "push_code" and get_settings().config.restricted_mode:
             return False
+        if capability == "publish_file_comments":
+            return False
         return True
+
+    def get_canonical_url_parts(self, repo_git_url: str, desired_branch: str) -> Tuple[str, str]:
+        """Return ``(prefix, suffix)`` for building a clickable file-view URL.
+
+        Used by ``/help_docs`` to turn a referenced doc path into a link. Gitea's
+        file-view URL is ``{base}/{owner}/{repo}/src/branch/{branch}/{path}``
+        (note ``src/branch/``, not GitHub's ``blob/``) — the same form this
+        provider already uses in ``get_line_link``. Mirrors
+        GithubProvider.get_canonical_url_parts, which returns
+        ``(".../blob/{branch}", "")``.
+
+        When an explicit ``repo_git_url`` is given (an external repo, possibly
+        different from the one this provider was initialized with), owner/repo/
+        host are parsed from it; otherwise the PR context (this provider's
+        owner/repo/base_url and PR branch) is used. Returns ``("", "")`` when no
+        usable context exists, matching the base class.
+        """
+        owner = None
+        repo = None
+        scheme_and_netloc = None
+        branch = desired_branch
+
+        if repo_git_url:
+            html_url = repo_git_url[:-4] if repo_git_url.endswith(".git") else repo_git_url
+            parsed = urlparse(html_url)
+            scheme_and_netloc = f"{parsed.scheme}://{parsed.netloc}"
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 2:
+                owner, repo = path_parts[0], path_parts[1]
+            else:
+                self.logger.error(f"Invalid repo_git_url for canonical url: {repo_git_url}")
+                return ("", "")
+        elif self.owner and self.repo:
+            owner, repo = self.owner, self.repo
+            scheme_and_netloc = self.base_url
+            if not branch:
+                branch = self.get_pr_branch()
+
+        if not all([scheme_and_netloc, owner, repo, branch]):
+            self.logger.error(
+                "Unable to get canonical url parts: missing PR context or explicit git url"
+            )
+            return ("", "")
+
+        prefix = f"{scheme_and_netloc}/{owner}/{repo}/src/branch/{branch}"
+        suffix = ""  # Gitea, like GitHub, adds no suffix
+        return (prefix, suffix)
+
+    def get_lines_link_original_file(self, filepath: str, component_range) -> str:
+        """Return a commit-pinned deep link to a line range of a file.
+
+        Mirrors GithubProvider.get_lines_link_original_file (``.../blob/{sha}/
+        {path}#L{start}-L{end}``) using Gitea's commit-view form
+        ``{base}/{owner}/{repo}/src/commit/{sha}/{path}#L{start}-L{end}``. The
+        range is 1-based (``component_range`` is 0-based, so +1 on both ends),
+        matching the GitHub implementation.
+
+        Note: no active caller in ``pr_agent/tools`` or ``pr_agent/algo`` reaches
+        this on Gitea today (it is used only by component / PR-Chat flows not
+        wired for Gitea); it exists for full-surface parity so the base-class
+        no-op never produces an empty link.
+        """
+        line_start = component_range.line_start + 1
+        line_end = component_range.line_end + 1
+        return (f"{self.base_url}/{self.owner}/{self.repo}/src/commit/{self.sha}/"
+                f"{filepath}#L{line_start}-L{line_end}")
+
+    def fetch_sub_issues(self, issue_url: str) -> Set[str]:
+        """Return the set of issue URLs that this issue depends on.
+
+        GitHub uses its GraphQL ``subIssues`` primitive; Gitea has neither
+        GraphQL nor a sub-issue concept, but it *does* have issue **dependencies**
+        (``GET /repos/{owner}/{repo}/issues/{index}/dependencies`` — the issues
+        that block this one), which is the closest native analogue of the
+        "linked issues that inform this one" set pr-agent wants for
+        ticket-compliance. This is an approximation, not a 1:1 port: dependencies
+        are a distinct (though semantically adjacent) feature, and this returns a
+        single level with no pagination cursor.
+
+        Each dependency item is a full Gitea ``Issue`` carrying ``html_url``, so
+        the mapping to the ``set()`` of URLs the caller expects is direct.
+        Returns an empty set on any failure so ticket-compliance degrades
+        gracefully rather than breaking.
+        """
+        sub_issues: Set[str] = set()
+        try:
+            owner, repo, index = self._parse_issue_url(issue_url)
+        except Exception as e:
+            self.logger.error(f"Could not parse issue url for sub-issues: {issue_url}: {e}")
+            return sub_issues
+        try:
+            deps = self.repo_api.get_issue_dependencies(
+                owner=owner, repo=repo, index=index
+            )
+            for dep in deps or []:
+                if isinstance(dep, dict) and dep.get("html_url"):
+                    sub_issues.add(dep["html_url"])
+        except Exception as e:
+            self.logger.error(f"Failed to fetch issue dependencies for {issue_url}: {e}")
+        return sub_issues
 
     def get_git_repo_url(self, issues_or_pr_url: str) -> str:
         return f"{self.base_url}/{self.owner}/{self.repo}.git" #base_url / <OWNER>/<REPO>.git
@@ -1741,6 +1921,95 @@ class RepoApi(giteapy.RepositoryApi):
         except Exception as e:
             self.logger.error(f"Unexpected error: {e}")
             return ""
+
+    def get_file_blob_sha(self, owner: str, repo: str, filepath: str,
+                          ref: Optional[str] = None) -> Optional[str]:
+        """Return the blob sha of a file (or None if it does not exist).
+
+        Maps to ``GET /repos/{owner}/{repo}/contents/{filepath}?ref=`` and reads
+        ``ContentsResponse.sha``. This blob sha (not a commit sha) is what
+        ``repo_update_file`` requires. Returns None when the file is absent (a
+        create), so ``create_or_update_file`` can branch on it.
+        """
+        try:
+            kwargs = {}
+            if ref:
+                kwargs["ref"] = ref
+            contents = self.repository.repo_get_contents(
+                owner=owner, repo=repo, filepath=filepath, **kwargs
+            )
+        except ApiException:
+            # 404 => file does not exist yet (a create); any other API error is
+            # also treated as "no sha" so the caller attempts a create rather
+            # than sending a stale/blank sha on an update.
+            return None
+        except Exception as e:
+            self.logger.error(f"Error getting blob sha for {filepath}: {e}")
+            return None
+        if contents is None:
+            return None
+        if isinstance(contents, dict):
+            return contents.get("sha")
+        return getattr(contents, "sha", None)
+
+    def create_or_update_file(self, owner: str, repo: str, filepath: str,
+                              branch: str, content_b64: str, message: str,
+                              sha: Optional[str] = None):
+        """Create (no ``sha``) or update (with ``sha``) a file via the contents API.
+
+        Maps to ``POST /repos/{owner}/{repo}/contents/{filepath}`` (repoCreateFile,
+        ``CreateFileOptions``) when ``sha`` is falsy, or ``PUT`` same path
+        (repoUpdateFile, ``UpdateFileOptions``) when ``sha`` is given. ``content``
+        is base64-encoded by the caller (Gitea requires base64). Uses the bundled
+        giteapy ``repo_create_file`` / ``repo_update_file``.
+        """
+        if sha:
+            body = giteapy.UpdateFileOptions(
+                branch=branch, content=content_b64, message=message, sha=sha
+            )
+            return self.repository.repo_update_file(
+                owner=owner, repo=repo, filepath=filepath, body=body
+            )
+        body = giteapy.CreateFileOptions(
+            branch=branch, content=content_b64, message=message
+        )
+        return self.repository.repo_create_file(
+            owner=owner, repo=repo, filepath=filepath, body=body
+        )
+
+    def get_issue_dependencies(self, owner: str, repo: str, index: int) -> List[Dict[str, Any]]:
+        """Return the issues this issue depends on (its blockers).
+
+        Maps to ``GET /repos/{owner}/{repo}/issues/{index}/dependencies``
+        (docs.gitea.com). Not in the bundled giteapy, so hand-rolled via
+        ``call_api`` (the same pattern used for compare/reviews). Each item is a
+        full Gitea ``Issue`` dict (carrying ``html_url``/``number``). Returns []
+        on failure so the caller degrades gracefully.
+        """
+        try:
+            url = f'/repos/{owner}/{repo}/issues/{index}/dependencies'
+            response = self.api_client.call_api(
+                url,
+                'GET',
+                path_params={},
+                response_type=None,
+                _return_http_data_only=False,
+                _preload_content=False,
+                auth_settings=['AuthorizationHeaderToken']
+            )
+            if hasattr(response, 'data'):
+                raw_data = response.data.read()
+                return json.loads(raw_data.decode('utf-8'))
+            elif isinstance(response, tuple):
+                raw_data = response[0].read()
+                return json.loads(raw_data.decode('utf-8'))
+            return []
+        except ApiException as e:
+            self.logger.error(f"Error getting issue dependencies for #{index}: {e}")
+            return []
+        except Exception as e:
+            self.logger.error(f"Unexpected error: {e}")
+            return []
 
     def get_issue_labels(self, owner: str, repo: str, issue_number: int):
         """Get labels assigned to the issue"""

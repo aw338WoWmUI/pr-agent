@@ -1691,3 +1691,344 @@ class TestGiteaProviderCommitStatus:
             'description': 'desc', 'target_url': 'http://u',
         }
         assert kwargs.get('auth_settings') == ['AuthorizationHeaderToken']
+
+
+class TestGiteaProviderGetPrFileContent:
+    """``get_pr_file_content`` reads a file on a branch, swallowing errors to ""."""
+
+    @staticmethod
+    def _provider():
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.owner = 'owner'
+        provider.repo = 'repo'
+        provider.repo_api = MagicMock()
+        return provider
+
+    def test_returns_content_and_passes_branch_as_ref(self):
+        provider = self._provider()
+        provider.repo_api.get_file_content.return_value = "hello\nworld"
+
+        result = provider.get_pr_file_content("CHANGELOG.md", "feature")
+
+        assert result == "hello\nworld"
+        provider.repo_api.get_file_content.assert_called_once_with(
+            owner='owner', repo='repo', commit_sha='feature', filepath='CHANGELOG.md',
+        )
+
+    def test_missing_file_returns_empty_string(self):
+        provider = self._provider()
+        provider.repo_api.get_file_content.return_value = ""
+        assert provider.get_pr_file_content("nope.md", "main") == ""
+
+    def test_none_result_coerced_to_empty_string(self):
+        provider = self._provider()
+        provider.repo_api.get_file_content.return_value = None
+        assert provider.get_pr_file_content("nope.md", "main") == ""
+
+    def test_exception_is_swallowed_to_empty_string(self):
+        provider = self._provider()
+        provider.repo_api.get_file_content.side_effect = Exception('boom')
+        assert provider.get_pr_file_content("f.md", "main") == ""
+        provider.logger.error.assert_called_once()
+
+
+class TestGiteaProviderCreateOrUpdatePrFile:
+    """``create_or_update_pr_file`` — the /update_changelog write path.
+
+    Verifies the base64 + blob-sha gotchas: content is base64-encoded, an
+    existing blob sha triggers an update, and a missing file triggers a create.
+    """
+
+    @staticmethod
+    def _provider():
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.owner = 'owner'
+        provider.repo = 'repo'
+        provider.repo_api = MagicMock()
+        return provider
+
+    def test_update_when_blob_sha_exists(self):
+        import base64
+        provider = self._provider()
+        provider.repo_api.get_file_blob_sha.return_value = 'blobsha123'
+
+        provider.create_or_update_pr_file(
+            file_path="CHANGELOG.md", branch="feature",
+            contents="new content", message="[skip ci] Update CHANGELOG.md",
+        )
+
+        provider.repo_api.get_file_blob_sha.assert_called_once_with(
+            owner='owner', repo='repo', filepath='CHANGELOG.md', ref='feature',
+        )
+        _, kwargs = provider.repo_api.create_or_update_file.call_args
+        assert kwargs['sha'] == 'blobsha123'
+        assert kwargs['branch'] == 'feature'
+        assert kwargs['message'] == "[skip ci] Update CHANGELOG.md"
+        # content must be base64-encoded (Gitea requirement)
+        assert kwargs['content_b64'] == base64.b64encode(b"new content").decode()
+
+    def test_create_when_no_blob_sha(self):
+        provider = self._provider()
+        provider.repo_api.get_file_blob_sha.return_value = None
+
+        provider.create_or_update_pr_file(
+            file_path="CHANGELOG.md", branch="feature",
+            contents="fresh", message="Create",
+        )
+
+        _, kwargs = provider.repo_api.create_or_update_file.call_args
+        assert kwargs['sha'] is None
+
+    def test_failure_is_swallowed(self):
+        provider = self._provider()
+        provider.repo_api.get_file_blob_sha.return_value = None
+        provider.repo_api.create_or_update_file.side_effect = Exception('boom')
+        # Must not raise — caller falls back to publishing a comment.
+        provider.create_or_update_pr_file("f.md", "b", "c", "m")
+        provider.logger.error.assert_called_once()
+
+
+class TestRepoApiFileWrites:
+    """HTTP-level checks for the create/update-file RepoApi wrappers."""
+
+    @staticmethod
+    def _repo_api():
+        from pr_agent.git_providers.gitea_provider import RepoApi
+
+        client = MagicMock()
+        repo_api = RepoApi(client)
+        repo_api.repository = MagicMock()
+        return repo_api
+
+    def test_get_file_blob_sha_reads_contents_sha(self):
+        repo_api = self._repo_api()
+        contents = MagicMock()
+        contents.sha = 'abc123'
+        repo_api.repository.repo_get_contents.return_value = contents
+
+        sha = repo_api.get_file_blob_sha('owner', 'repo', 'CHANGELOG.md', ref='feature')
+
+        assert sha == 'abc123'
+        repo_api.repository.repo_get_contents.assert_called_once_with(
+            owner='owner', repo='repo', filepath='CHANGELOG.md', ref='feature',
+        )
+
+    def test_get_file_blob_sha_returns_none_when_missing(self):
+        from giteapy.rest import ApiException
+        repo_api = self._repo_api()
+        repo_api.repository.repo_get_contents.side_effect = ApiException(status=404)
+        assert repo_api.get_file_blob_sha('owner', 'repo', 'nope.md') is None
+
+    def test_create_or_update_file_updates_with_sha(self):
+        import giteapy
+        repo_api = self._repo_api()
+
+        repo_api.create_or_update_file(
+            'owner', 'repo', 'CHANGELOG.md', 'feature',
+            content_b64='Y29udGVudA==', message='msg', sha='blob1',
+        )
+
+        repo_api.repository.repo_update_file.assert_called_once()
+        _, kwargs = repo_api.repository.repo_update_file.call_args
+        assert kwargs['owner'] == 'owner'
+        assert kwargs['filepath'] == 'CHANGELOG.md'
+        body = kwargs['body']
+        assert isinstance(body, giteapy.UpdateFileOptions)
+        assert body.sha == 'blob1'
+        assert body.content == 'Y29udGVudA=='
+        assert body.branch == 'feature'
+        repo_api.repository.repo_create_file.assert_not_called()
+
+    def test_create_or_update_file_creates_without_sha(self):
+        import giteapy
+        repo_api = self._repo_api()
+
+        repo_api.create_or_update_file(
+            'owner', 'repo', 'CHANGELOG.md', 'feature',
+            content_b64='Y29udGVudA==', message='msg', sha=None,
+        )
+
+        repo_api.repository.repo_create_file.assert_called_once()
+        _, kwargs = repo_api.repository.repo_create_file.call_args
+        body = kwargs['body']
+        assert isinstance(body, giteapy.CreateFileOptions)
+        assert body.content == 'Y29udGVudA=='
+        assert body.branch == 'feature'
+        repo_api.repository.repo_update_file.assert_not_called()
+
+
+class TestGiteaProviderPublishFileCommentsCapability:
+    """``publish_file_comments`` must be reported as unsupported.
+
+    Closes a latent AttributeError: pr_description only calls the (unimplemented)
+    method when this capability is True.
+    """
+
+    @staticmethod
+    def _provider():
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        return provider
+
+    @patch('pr_agent.git_providers.gitea_provider.get_settings')
+    def test_publish_file_comments_unsupported(self, mock_get_settings):
+        settings = MagicMock()
+        settings.config.restricted_mode = False
+        mock_get_settings.return_value = settings
+        assert self._provider().is_supported("publish_file_comments") is False
+
+
+class TestGiteaProviderCanonicalUrlParts:
+    """``get_canonical_url_parts`` — /help_docs file-link prefix (src/branch form)."""
+
+    @staticmethod
+    def _provider(branch='main'):
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.base_url = 'https://gitea.example.com'
+        provider.owner = 'acme'
+        provider.repo = 'widget'
+        provider.pr = MagicMock()
+        provider.pr.head.ref = branch
+        return provider
+
+    def test_uses_pr_context_with_src_branch_form(self):
+        provider = self._provider(branch='dev')
+        prefix, suffix = provider.get_canonical_url_parts(repo_git_url=None, desired_branch='dev')
+        assert prefix == 'https://gitea.example.com/acme/widget/src/branch/dev'
+        assert suffix == ''
+
+    def test_falls_back_to_pr_branch_when_no_desired_branch(self):
+        provider = self._provider(branch='feature-x')
+        prefix, _ = provider.get_canonical_url_parts(repo_git_url=None, desired_branch='')
+        assert prefix.endswith('/src/branch/feature-x')
+
+    def test_explicit_repo_git_url_is_parsed(self):
+        provider = self._provider()
+        prefix, suffix = provider.get_canonical_url_parts(
+            repo_git_url='https://other.host/foo/bar.git', desired_branch='v1',
+        )
+        assert prefix == 'https://other.host/foo/bar/src/branch/v1'
+        assert suffix == ''
+
+    def test_returns_empty_when_no_context(self):
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.owner = None
+        provider.repo = None
+        assert provider.get_canonical_url_parts(repo_git_url=None, desired_branch='') == ("", "")
+
+
+class TestGiteaProviderLinesLinkOriginalFile:
+    """``get_lines_link_original_file`` — commit-pinned deep link (src/commit form)."""
+
+    def test_builds_commit_pinned_range_link(self):
+        from types import SimpleNamespace
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.base_url = 'https://gitea.example.com'
+        provider.owner = 'acme'
+        provider.repo = 'widget'
+        provider.sha = 'deadbeef'
+
+        # component_range is 0-based; the link is 1-based (+1 on both ends).
+        rng = SimpleNamespace(line_start=9, line_end=19)
+        link = provider.get_lines_link_original_file('src/foo.py', rng)
+        assert link == (
+            'https://gitea.example.com/acme/widget/src/commit/deadbeef/src/foo.py#L10-L20'
+        )
+
+
+class TestGiteaProviderFetchSubIssues:
+    """``fetch_sub_issues`` — Gitea issue *dependencies* as the sub-issue analogue."""
+
+    @staticmethod
+    def _provider():
+        from pr_agent.git_providers.gitea_provider import GiteaProvider
+
+        provider = GiteaProvider.__new__(GiteaProvider)
+        provider.logger = MagicMock()
+        provider.repo_api = MagicMock()
+        return provider
+
+    def test_returns_dependency_html_urls(self):
+        provider = self._provider()
+        provider.repo_api.get_issue_dependencies.return_value = [
+            {'html_url': 'https://gitea.example.com/o/r/issues/2', 'number': 2},
+            {'html_url': 'https://gitea.example.com/o/r/issues/3', 'number': 3},
+        ]
+
+        result = provider.fetch_sub_issues('https://gitea.example.com/o/r/issues/1')
+
+        assert result == {
+            'https://gitea.example.com/o/r/issues/2',
+            'https://gitea.example.com/o/r/issues/3',
+        }
+        provider.repo_api.get_issue_dependencies.assert_called_once_with(
+            owner='o', repo='r', index=1,
+        )
+
+    def test_skips_items_without_html_url(self):
+        provider = self._provider()
+        provider.repo_api.get_issue_dependencies.return_value = [
+            {'number': 5},  # no html_url
+            {'html_url': 'https://gitea.example.com/o/r/issues/6'},
+        ]
+        result = provider.fetch_sub_issues('https://gitea.example.com/o/r/issues/1')
+        assert result == {'https://gitea.example.com/o/r/issues/6'}
+
+    def test_unparseable_url_returns_empty_set(self):
+        provider = self._provider()
+        result = provider.fetch_sub_issues('https://gitea.example.com/not-an-issue')
+        assert result == set()
+        provider.repo_api.get_issue_dependencies.assert_not_called()
+
+    def test_api_failure_returns_empty_set(self):
+        provider = self._provider()
+        provider.repo_api.get_issue_dependencies.side_effect = Exception('boom')
+        result = provider.fetch_sub_issues('https://gitea.example.com/o/r/issues/1')
+        assert result == set()
+        provider.logger.error.assert_called_once()
+
+
+class TestRepoApiIssueDependencies:
+    """HTTP-level check for the issue-dependencies RepoApi wrapper."""
+
+    def test_hits_dependencies_endpoint(self):
+        from pr_agent.git_providers.gitea_provider import RepoApi
+
+        client = MagicMock()
+        repo_api = RepoApi(client)
+        resp = MagicMock()
+        resp.data = BytesIO(b'[{"html_url": "http://x/issues/2"}]')
+        client.call_api.return_value = resp
+
+        result = repo_api.get_issue_dependencies('owner', 'repo', 7)
+
+        args, kwargs = client.call_api.call_args
+        assert args[0] == '/repos/owner/repo/issues/7/dependencies'
+        assert args[1] == 'GET'
+        assert kwargs.get('auth_settings') == ['AuthorizationHeaderToken']
+        assert result == [{'html_url': 'http://x/issues/2'}]
+
+    def test_returns_empty_list_on_error(self):
+        from giteapy.rest import ApiException
+        from pr_agent.git_providers.gitea_provider import RepoApi
+
+        client = MagicMock()
+        repo_api = RepoApi(client)
+        client.call_api.side_effect = ApiException(status=500)
+        assert repo_api.get_issue_dependencies('owner', 'repo', 7) == []
