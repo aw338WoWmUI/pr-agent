@@ -94,6 +94,7 @@ async def handle_request(body: Dict[str, Any], event: str):
     if not action:
         get_logger().debug("No action found in request body")
         return {}
+    get_logger().debug(f"Gitea webhook event={event!r} action={action!r}")
 
     # Never act on an event the agent itself raised (e.g. its own review-submitted
     # echo or its own comment), which would otherwise self-trigger an endless loop.
@@ -111,6 +112,9 @@ async def handle_request(body: Dict[str, Any], event: str):
         if action in ["opened", "reopened", "synchronized"]:
             await handle_pr_event(body, event, action, agent)
         elif action == "review_requested":
+            await handle_review_requested_event(body, event, action, agent)
+    elif event == "pull_request_review_request":
+        if action == "review_requested":
             await handle_review_requested_event(body, event, action, agent)
     elif event == "issue_comment":
         if action == "created":
@@ -166,23 +170,30 @@ def review_requested_for_bot(body: Dict[str, Any]) -> bool:
     """True when the (re-)requested reviewer is the agent's bot account."""
     bot = get_bot_user().lower()
     requested = body.get("requested_reviewer") or {}
-    if isinstance(requested, dict) and str(requested.get("login", "")).lower() == bot:
+    if reviewer_login_matches(requested, bot):
         return True
     # fall back to the PR's current requested-reviewers list
     for user in (body.get("pull_request") or {}).get("requested_reviewers") or []:
-        if isinstance(user, dict) and str(user.get("login", "")).lower() == bot:
+        if reviewer_login_matches(user, bot):
             return True
     return False
+
+
+def reviewer_login_matches(user: Any, bot: str) -> bool:
+    if not isinstance(user, dict):
+        return False
+    login = user.get("login") or user.get("username") or user.get("name") or ""
+    return str(login).lower() == bot
 
 
 async def handle_review_requested_event(body: Dict[str, Any], event: str, action: str, agent: PRAgent):
     """Auto-run /review when the bot is (re-)requested as a reviewer.
 
-    Gitea fires ``pull_request`` with ``action=review_requested`` when a
-    reviewer is added (including the "re-request review" button). Upstream
-    never wired this action, so a reviewer request was a no-op. We run the
-    configured ``pr_commands`` (which include /review) so the reviewer slot is
-    filled on demand.
+    Gitea fires ``pull_request_review_request`` with
+    ``action=review_requested`` when a reviewer is added (including the
+    "re-request review" button). Older/compatible payloads may use
+    ``pull_request``. We run the configured ``pr_commands`` (which include
+    /review) so the reviewer slot is filled on demand.
     """
     if not review_requested_for_bot(body):
         get_logger().debug("Review requested, but not for the bot user; ignoring")

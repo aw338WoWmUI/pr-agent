@@ -183,6 +183,12 @@ class TestGiteaReviewRequested:
                 {'requested_reviewer': {'login': 'PR-Agent'}}
             ) is True
 
+    def test_review_requested_for_bot_username_field(self):
+        with patch('pr_agent.servers.gitea_app.get_settings', return_value=self._settings()):
+            assert gitea_app.review_requested_for_bot(
+                {'requested_reviewer': {'username': 'PR-Agent'}}
+            ) is True
+
     def test_review_requested_for_bot_reviewers_list(self):
         with patch('pr_agent.servers.gitea_app.get_settings', return_value=self._settings()):
             assert gitea_app.review_requested_for_bot(
@@ -232,8 +238,7 @@ class TestGiteaReviewRequested:
 
     @pytest.mark.asyncio
     async def test_handle_request_routes_review_requested(self):
-        """The pull_request/review_requested action must route to the new
-        handler (upstream let it fall through as a no-op)."""
+        """The pull_request/review_requested action must route to the handler."""
         body = {
             'action': 'review_requested',
             'sender': {'login': 'alice'},
@@ -246,6 +251,23 @@ class TestGiteaReviewRequested:
              patch('pr_agent.servers.gitea_app.should_process_pr_logic', return_value=True), \
              patch('pr_agent.servers.gitea_app.handle_review_requested_event', new=AsyncMock()) as mock_handler:
             await gitea_app.handle_request(body, event='pull_request')
+
+        mock_handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_request_routes_review_request_webhook_event(self):
+        """Gitea sends reviewer requests as pull_request_review_request."""
+        body = {
+            'action': 'review_requested',
+            'sender': {'login': 'alice'},
+            'requested_reviewer': {'login': 'pr-agent'},
+            'pull_request': {'url': 'https://gitea.example.com/api/v1/repos/o/r/pulls/1'},
+        }
+
+        with patch('pr_agent.servers.gitea_app.get_settings', return_value=self._settings()), \
+             patch('pr_agent.servers.gitea_app.PRAgent'), \
+             patch('pr_agent.servers.gitea_app.handle_review_requested_event', new=AsyncMock()) as mock_handler:
+            await gitea_app.handle_request(body, event='pull_request_review_request')
 
         mock_handler.assert_awaited_once()
 
