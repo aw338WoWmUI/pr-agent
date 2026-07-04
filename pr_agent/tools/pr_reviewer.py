@@ -191,8 +191,39 @@ class PRReviewer:
                 self.git_provider.publish_comment(pr_review)
 
             self.git_provider.remove_initial_comment()
+            self._publish_review_as_commit_status(pr_review)
         except Exception as e:
             get_logger().error(f"Failed to review PR: {e}")
+
+    def _publish_review_as_commit_status(self, pr_review: str) -> None:
+        """Surface the review outcome as a commit status on the PR head.
+
+        Gitea analogue of GithubProvider's ``publish_as_check_run`` (Gitea has no
+        Checks API, only commit statuses). Gated behind
+        ``gitea.publish_review_as_status`` (default off) and only fires when the
+        provider actually exposes ``publish_commit_status`` (i.e. Gitea), so it is
+        a no-op for every other provider and when the flag is unset.
+
+        Like GitHub's check run (which reports a neutral ``conclusion`` rather
+        than deriving pass/fail from the verdict), this emits a ``success`` status
+        meaning "the review ran and was published" so branch protection can
+        require the PR-Agent status. Failures are swallowed by the provider
+        helper; this method never breaks the underlying review.
+        """
+        if not get_settings().get("gitea.publish_review_as_status", False):
+            return
+        if not hasattr(self.git_provider, "publish_commit_status"):
+            return
+        try:
+            summary = pr_review.split("\n\n", 1)[0].strip(" #\n") or "PR reviewed"
+            self.git_provider.publish_commit_status(
+                state="success",
+                context="PR-Agent/review",
+                description=summary,
+                target_url=self.git_provider.get_pr_url(),
+            )
+        except Exception as e:
+            get_logger().error(f"Failed to publish review commit status: {e}")
 
     def _should_publish_review_no_suggestions(self, pr_review: str) -> bool:
         return get_settings().pr_reviewer.get('publish_output_no_suggestions', True) or "No major issues detected" not in pr_review

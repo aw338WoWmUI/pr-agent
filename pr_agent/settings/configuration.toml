@@ -300,6 +300,10 @@ handle_push_trigger = false
 # diffing only the newly pushed commits (before...after). Default false = every
 # push re-reviews the whole PR (the pre-existing behavior).
 incremental_review_on_push = false
+# When true, /review also emits a Gitea commit status on the PR head (Gitea's
+# nearest equivalent to GitHub's publish_as_check_run — Gitea has no Checks API).
+# Lets branch protection require the "PR-Agent/review" status. Default false.
+publish_review_as_status = false
 pr_commands = [
     "/describe",
     "/review",

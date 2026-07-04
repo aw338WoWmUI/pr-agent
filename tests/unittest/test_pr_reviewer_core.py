@@ -127,3 +127,74 @@ def test_init_maps_user_question_and_answer_to_correct_prompt_vars(monkeypatch):
 
     assert reviewer.vars["question_str"] == "Questions to better understand the PR:\n- Why?"
     assert reviewer.vars["answer_str"] == "/answer Because it fixes production."
+
+
+def test_publish_review_as_commit_status_noop_when_flag_off():
+    """The Gitea commit-status surface must stay off unless explicitly enabled,
+    so it is a no-op for every provider by default."""
+    settings = get_settings()
+    original = settings.get("gitea.publish_review_as_status", False)
+    try:
+        settings.set("gitea.publish_review_as_status", False)
+        provider = MagicMock()
+        reviewer = _make_reviewer(provider)
+        reviewer._publish_review_as_commit_status("## Review\n\nAll good")
+        provider.publish_commit_status.assert_not_called()
+    finally:
+        settings.set("gitea.publish_review_as_status", original)
+
+
+def test_publish_review_as_commit_status_noop_when_provider_lacks_capability():
+    """Even with the flag on, a provider without publish_commit_status (e.g.
+    GitHub/GitLab) must be untouched — no AttributeError, no call."""
+    settings = get_settings()
+    original = settings.get("gitea.publish_review_as_status", False)
+    try:
+        settings.set("gitea.publish_review_as_status", True)
+        # spec=[] => hasattr is False for any attribute name.
+        provider = MagicMock(spec=[])
+        reviewer = _make_reviewer(provider)
+        # Must not raise.
+        reviewer._publish_review_as_commit_status("## Review\n\nAll good")
+    finally:
+        settings.set("gitea.publish_review_as_status", original)
+
+
+def test_publish_review_as_commit_status_emits_success_when_enabled():
+    """With the flag on and a Gitea-like provider, a success status is emitted
+    on the PR head, mirroring GitHub's publish_as_check_run surface."""
+    settings = get_settings()
+    original = settings.get("gitea.publish_review_as_status", False)
+    try:
+        settings.set("gitea.publish_review_as_status", True)
+        provider = MagicMock(spec=["publish_commit_status", "get_pr_url"])
+        provider.get_pr_url.return_value = "https://gitea.example.com/o/r/pulls/1"
+        reviewer = _make_reviewer(provider)
+
+        reviewer._publish_review_as_commit_status("## PR Review 🔍\n\nSummary line here")
+
+        provider.publish_commit_status.assert_called_once()
+        _, kwargs = provider.publish_commit_status.call_args
+        assert kwargs["state"] == "success"
+        assert kwargs["context"] == "PR-Agent/review"
+        # Summary is the first block, stripped of markdown heading chars.
+        assert kwargs["description"] == "PR Review 🔍"
+        assert kwargs["target_url"] == "https://gitea.example.com/o/r/pulls/1"
+    finally:
+        settings.set("gitea.publish_review_as_status", original)
+
+
+def test_publish_review_as_commit_status_swallows_provider_errors():
+    """A failing status emission must never break the review flow."""
+    settings = get_settings()
+    original = settings.get("gitea.publish_review_as_status", False)
+    try:
+        settings.set("gitea.publish_review_as_status", True)
+        provider = MagicMock(spec=["publish_commit_status", "get_pr_url"])
+        provider.get_pr_url.return_value = "u"
+        provider.publish_commit_status.side_effect = Exception("boom")
+        reviewer = _make_reviewer(provider)
+        # Must not raise.
+        reviewer._publish_review_as_commit_status("## Review\n\nbody")
+    finally:
+        settings.set("gitea.publish_review_as_status", original)
