@@ -10,7 +10,7 @@ import asyncio
 import pytest
 
 from pr_agent.config_loader import get_settings
-from pr_agent.git_providers import AzureDevopsProvider, GithubProvider
+from pr_agent.git_providers import AzureDevopsProvider, GiteaProvider, GithubProvider
 from pr_agent.tools import ticket_pr_compliance_check as tpc
 from pr_agent.tools.ticket_pr_compliance_check import (
     extract_and_cache_pr_tickets,
@@ -82,6 +82,44 @@ def _make_github_provider(
 def _make_azure_provider(work_items):
     provider = AzureDevopsProvider.__new__(AzureDevopsProvider)
     provider.get_linked_work_items = lambda: work_items
+    return provider
+
+
+class _FakeGiteaRepoApi:
+    def __init__(self, issues_by_key=None, raise_for=None):
+        self._issues = issues_by_key or {}
+        self._raise_for = raise_for or set()
+
+    def get_issue(self, owner, repo, index):
+        key = (owner, repo, index)
+        if key in self._raise_for:
+            raise RuntimeError(f"boom for issue {owner}/{repo}#{index}")
+        if key not in self._issues:
+            raise KeyError(f"unknown issue {owner}/{repo}#{index}")
+        return self._issues[key]
+
+
+def _make_gitea_provider(
+    *,
+    user_description="",
+    branch="main",
+    owner="ZeroIM",
+    repo="ZeroIM",
+    base_url="https://git.aw338zone.com",
+    repo_api=None,
+    sub_issues_map=None,
+):
+    """Build a GiteaProvider that passes ``isinstance`` checks without __init__."""
+    provider = GiteaProvider.__new__(GiteaProvider)
+    provider.owner = owner
+    provider.repo = repo
+    provider.base_url = base_url
+    provider.repo_api = repo_api
+    provider.get_user_description = lambda: user_description
+    provider.get_pr_branch = lambda: branch
+
+    sub_issues_map = sub_issues_map or {}
+    provider.fetch_sub_issues = lambda ticket_url: sub_issues_map.get(ticket_url, [])
     return provider
 
 
@@ -381,6 +419,77 @@ class TestAzureDevopsExtraction:
         assert result[1]["body"] == "short"
         assert result[1]["labels"] == ""
         assert result[1].get("requirements", "") == ""
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8: Gitea extraction reads linked issues and dependencies
+# ---------------------------------------------------------------------------
+
+class TestGiteaExtraction:
+    def test_gitea_description_and_branch_tickets_are_fetched(self, settings_snapshot):
+        repo_api = _FakeGiteaRepoApi({
+            ("ZeroIM", "ZeroIM", 77): {
+                "number": 77,
+                "title": "Review context from issue",
+                "body": "acceptance criteria",
+                "labels": [{"name": "bug"}, {"name": "high-priority"}],
+            },
+            ("ZeroIM", "ZeroIM", 78): {
+                "number": 78,
+                "title": "Branch context",
+                "body": "branch body",
+                "labels": [],
+            },
+        })
+        provider = _make_gitea_provider(
+            user_description="Fixes #77",
+            branch="feature/78-follow-up",
+            repo_api=repo_api,
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result is not None
+        assert [ticket["ticket_id"] for ticket in result] == [77, 78]
+        assert result[0]["ticket_url"] == "https://git.aw338zone.com/ZeroIM/ZeroIM/issues/77"
+        assert result[0]["labels"] == "bug, high-priority"
+        assert result[0]["body"] == "acceptance criteria"
+
+    def test_gitea_full_issue_url_and_dependency_are_fetched(self, settings_snapshot):
+        main_url = "https://git.aw338zone.com/ZeroIM/ZeroIM/issues/90"
+        dep_url = "https://git.aw338zone.com/ZeroIM/ZeroIM/issues/91"
+        repo_api = _FakeGiteaRepoApi({
+            ("ZeroIM", "ZeroIM", 90): {
+                "number": 90,
+                "title": "Main",
+                "body": "main body",
+                "labels": [{"name": "feature"}],
+            },
+            ("ZeroIM", "ZeroIM", 91): {
+                "number": 91,
+                "title": "Dependency",
+                "body": "dependency body",
+                "labels": [{"name": "requirement"}],
+            },
+        })
+        provider = _make_gitea_provider(
+            user_description=f"Implements {main_url}",
+            repo_api=repo_api,
+            sub_issues_map={main_url: [dep_url]},
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result and len(result) == 1
+        assert result[0]["ticket_id"] == 90
+        assert result[0]["sub_issues"] == [{
+            "ticket_id": 91,
+            "ticket_url": dep_url,
+            "title": "Dependency",
+            "body": "dependency body",
+            "labels": "requirement",
+            "sub_issues": [],
+        }]
 
 
 # ---------------------------------------------------------------------------

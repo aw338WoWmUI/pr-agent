@@ -1638,6 +1638,14 @@ class RepoApi(giteapy.RepositoryApi):
             index=index
         )
 
+    def get_issue(self, owner: str, repo: str, index: int):
+        """Fetch one issue/PR by issue index."""
+        return self.issue.issue_get_issue(
+            owner=owner,
+            repo=repo,
+            index=index
+        )
+
     def get_comment(self, owner: str, repo: str, comment_id: int):
         """Fetch a single issue/PR comment by its id.
 

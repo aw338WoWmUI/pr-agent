@@ -4,11 +4,13 @@ import traceback
 from pr_agent.config_loader import get_settings
 from pr_agent.git_providers import GithubProvider
 from pr_agent.git_providers import AzureDevopsProvider
+from pr_agent.git_providers import GiteaProvider
 from pr_agent.log import get_logger
 
 # Compile the regex pattern once, outside the function
 GITHUB_TICKET_PATTERN = re.compile(
-     r'(https://github[^/]+/[^/]+/[^/]+/issues/\d+)|(\b(\w+)/(\w+)#(\d+)\b)|(#\d+)'
+     r'(https?://[^\s)>"\']+/[^/\s)>"\']+/[^/\s)>"\']+/issues/\d+)'
+     r'|(\b([\w.-]+)/([\w.-]+)#(\d+)\b)|(#\d+)'
 )
 # Option A: issue number at start of branch or after /, followed by - or end (e.g. feature/1-test-issue, 123-fix)
 BRANCH_ISSUE_PATTERN = re.compile(r"(?:^|/)(\d{1,6})(?=-|$)")
@@ -114,6 +116,44 @@ def extract_ticket_links_from_branch_name(branch_name, repo_path, base_url_html=
     return list(github_tickets)
 
 
+def _issue_attr(issue, attr_name, default=None):
+    if isinstance(issue, dict):
+        return issue.get(attr_name, default)
+    return getattr(issue, attr_name, default)
+
+
+def _issue_labels(issue):
+    labels = []
+    try:
+        for label in _issue_attr(issue, "labels", []) or []:
+            if isinstance(label, dict):
+                labels.append(label.get("name", ""))
+            else:
+                labels.append(label.name if hasattr(label, "name") else label)
+    except Exception as e:
+        get_logger().error(f"Error extracting labels error= {e}",
+                           artifact={"traceback": traceback.format_exc()})
+    return [str(label) for label in labels if label]
+
+
+def _trim_ticket_body(body, max_characters):
+    body = body or ""
+    if len(body) > max_characters:
+        return body[:max_characters] + "..."
+    return body
+
+
+def _build_ticket_content(ticket_url, issue, body, labels, sub_issues_content=None):
+    return {
+        'ticket_id': _issue_attr(issue, "number"),
+        'ticket_url': ticket_url,
+        'title': _issue_attr(issue, "title", ""),
+        'body': body,
+        'labels': ", ".join(labels),
+        'sub_issues': sub_issues_content or [],
+    }
+
+
 async def extract_tickets(git_provider):
     MAX_TICKET_CHARACTERS = 10000
     try:
@@ -190,13 +230,7 @@ async def extract_tickets(git_provider):
                         get_logger().warning(f"Failed to fetch sub-issues for {ticket}: {e}")
 
                     # Extract labels
-                    labels = []
-                    try:
-                        for label in issue_main.labels:
-                            labels.append(label.name if hasattr(label, 'name') else label)
-                    except Exception as e:
-                        get_logger().error(f"Error extracting labels error= {e}",
-                                           artifact={"traceback": traceback.format_exc()})
+                    labels = _issue_labels(issue_main)
 
                     tickets_content.append({
                         'ticket_id': issue_main.number,
@@ -208,6 +242,74 @@ async def extract_tickets(git_provider):
                     })
 
                 return tickets_content
+
+        elif isinstance(git_provider, GiteaProvider):
+            user_description = git_provider.get_user_description()
+            repo_path = f"{git_provider.owner}/{git_provider.repo}"
+            description_tickets = extract_ticket_links_from_pr_description(
+                user_description, repo_path, git_provider.base_url
+            )
+            branch_name = git_provider.get_pr_branch()
+            branch_tickets = extract_ticket_links_from_branch_name(
+                branch_name, repo_path, git_provider.base_url
+            )
+            seen = set()
+            tickets = []
+            for link in description_tickets + branch_tickets:
+                if link not in seen:
+                    seen.add(link)
+                    tickets.append(link)
+            if len(tickets) > 3:
+                get_logger().info(f"Too many tickets (description + branch): {len(tickets)}")
+                tickets = tickets[:3]
+
+            tickets_content = []
+            for ticket in tickets:
+                try:
+                    owner, repo, issue_number = git_provider._parse_issue_url(ticket)
+                    issue_main = git_provider.repo_api.get_issue(
+                        owner=owner, repo=repo, index=issue_number
+                    )
+                except Exception as e:
+                    get_logger().error(f"Error getting main issue: {e}",
+                                       artifact={"traceback": traceback.format_exc()})
+                    continue
+
+                issue_body_str = _trim_ticket_body(
+                    _issue_attr(issue_main, "body", ""), MAX_TICKET_CHARACTERS
+                )
+
+                sub_issues_content = []
+                try:
+                    sub_issues = git_provider.fetch_sub_issues(ticket)
+                    for sub_issue_url in sub_issues:
+                        try:
+                            sub_owner, sub_repo, sub_issue_number = git_provider._parse_issue_url(sub_issue_url)
+                            sub_issue = git_provider.repo_api.get_issue(
+                                owner=sub_owner, repo=sub_repo, index=sub_issue_number
+                            )
+                            sub_issues_content.append(_build_ticket_content(
+                                sub_issue_url,
+                                sub_issue,
+                                _trim_ticket_body(
+                                    _issue_attr(sub_issue, "body", ""), MAX_TICKET_CHARACTERS
+                                ),
+                                _issue_labels(sub_issue),
+                            ))
+                        except Exception as e:
+                            get_logger().warning(f"Failed to fetch sub-issue content for {sub_issue_url}: {e}")
+                except Exception as e:
+                    get_logger().warning(f"Failed to fetch sub-issues for {ticket}: {e}")
+
+                tickets_content.append(_build_ticket_content(
+                    ticket,
+                    issue_main,
+                    issue_body_str,
+                    _issue_labels(issue_main),
+                    sub_issues_content,
+                ))
+
+            return tickets_content
 
         elif isinstance(git_provider, AzureDevopsProvider):
             tickets_info = git_provider.get_linked_work_items()
