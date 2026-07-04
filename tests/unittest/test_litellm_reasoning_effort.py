@@ -761,6 +761,41 @@ class TestLiteLLMReasoningEffort:
             assert call_kwargs["reasoning_effort"] == "low"
 
     @pytest.mark.asyncio
+    async def test_gpt5_with_chatgpt_prefix_uses_responses_mode(self, monkeypatch, mock_logger):
+        """chatgpt/ Codex models must keep their provider, use reasoning_effort, and register Responses mode."""
+        fake_settings = create_mock_settings("xhigh")
+        monkeypatch.setattr(litellm_handler, "get_settings", lambda: fake_settings)
+        for _var in ("AWS_USE_IMDS", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                     "AWS_SESSION_TOKEN", "AWS_REGION_NAME", "OPENAI_API_KEY"):
+            monkeypatch.delenv(_var, raising=False)
+
+        with patch(
+            'pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion',
+            new_callable=AsyncMock,
+        ) as mock_completion, patch(
+            'pr_agent.algo.ai_handlers.litellm_ai_handler._handle_streaming_response',
+            new_callable=AsyncMock,
+        ) as mock_stream, patch.object(litellm_handler.litellm, "register_model") as mock_register:
+            mock_completion.return_value = create_mock_acompletion_response()
+            mock_stream.return_value = ("test", "stop")
+
+            handler = LiteLLMAIHandler()
+            await handler.chat_completion(
+                model="chatgpt/gpt-5.5",
+                system="test system",
+                user="test user"
+            )
+
+            call_kwargs = mock_completion.call_args[1]
+            assert call_kwargs["model"] == "chatgpt/gpt-5.5"
+            assert call_kwargs["reasoning_effort"] == "xhigh"
+            assert call_kwargs["stream"] is True
+            assert "temperature" not in call_kwargs
+            mock_register.assert_called_once_with({
+                "chatgpt/gpt-5.5": {"mode": "responses", "litellm_provider": "chatgpt"}
+            })
+
+    @pytest.mark.asyncio
     async def test_gpt5_with_explicit_azure_prefix_preserves_routing(self, monkeypatch, mock_logger):
         """Explicit `azure/` prefix in user config must be preserved (not silently rewritten to openai/)."""
         fake_settings = create_mock_settings("medium")

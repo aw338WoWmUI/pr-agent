@@ -477,8 +477,8 @@ class LiteLLMAIHandler(BaseAiHandler):
                 # like "azure/openai/gpt-5...". Without normalization the GPT-5 path is skipped and
                 # litellm rejects the request with UnsupportedParamsError for temperature=0.2.
                 model_base = model
-                while model_base.startswith(('openai/', 'azure/')):
-                    model_base = model_base.removeprefix('openai/').removeprefix('azure/')
+                while model_base.startswith(('openai/', 'azure/', 'chatgpt/')):
+                    model_base = model_base.removeprefix('openai/').removeprefix('azure/').removeprefix('chatgpt/')
                 if model_base.startswith('gpt-5'):
                     # Use configured reasoning_effort or default to MEDIUM
                     config_effort = get_settings().config.reasoning_effort
@@ -498,10 +498,12 @@ class LiteLLMAIHandler(BaseAiHandler):
                         "allowed_openai_params": ["reasoning_effort"],
                     }
                     get_logger().info(f"Using reasoning_effort='{effort}' for GPT-5 model")
-                    # Routing priority: Azure mode > explicit provider prefix in user config > openai/
-                    # default. This preserves an explicit "azure/" the user wrote in config even when
-                    # self.azure is false, and avoids stacking when self.azure already added "azure/".
-                    if self.azure:
+                    # Routing priority: explicit chatgpt/ > Azure mode > explicit provider prefix
+                    # in user config > openai/ default. chatgpt/ must stay chatgpt/ so LiteLLM uses
+                    # ChatGPT subscription auth instead of rewriting it to OpenAI/Azure.
+                    if user_model.startswith('chatgpt/'):
+                        provider_prefix = 'chatgpt/'
+                    elif self.azure:
                         provider_prefix = 'azure/'
                     elif user_model.startswith('azure/'):
                         provider_prefix = 'azure/'
@@ -511,6 +513,8 @@ class LiteLLMAIHandler(BaseAiHandler):
                         provider_prefix = 'openai/'
                     model = provider_prefix + model_base.replace('_thinking', '')  # remove _thinking suffix
 
+                if model.startswith("chatgpt/"):
+                    litellm.register_model({model: {"mode": "responses", "litellm_provider": "chatgpt"}})
 
                 # Currently, some models do not support a separate system and user prompts
                 if model in self.user_message_only_models or get_settings().config.custom_reasoning_model:
@@ -716,7 +720,7 @@ class LiteLLMAIHandler(BaseAiHandler):
         Wrapper that automatically handles streaming for required models.
         """
         model = kwargs["model"]
-        if model in self.streaming_required_models:
+        if model in self.streaming_required_models or model.startswith("chatgpt/"):
             kwargs["stream"] = True
             get_logger().info(f"Using streaming mode for model {model}")
             response = await acompletion(**kwargs)

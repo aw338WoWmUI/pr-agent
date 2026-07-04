@@ -200,3 +200,25 @@ async def test_get_completion_uses_streaming_for_required_models():
     assert resp == "streamed text"
     assert finish_reason == "stop"
     assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
+
+
+@pytest.mark.asyncio
+async def test_get_completion_uses_streaming_for_chatgpt_models():
+    handler = litellm_handler.LiteLLMAIHandler.__new__(litellm_handler.LiteLLMAIHandler)
+    handler.streaming_required_models = []
+
+    with patch("pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion", new_callable=AsyncMock) as mock_call, \
+            patch("pr_agent.algo.ai_handlers.litellm_ai_handler._handle_streaming_response",
+                  new_callable=AsyncMock) as mock_stream:
+        mock_call.return_value = "stream"
+        mock_stream.return_value = ("streamed text", "stop")
+
+        resp, finish_reason, response_obj = await handler._get_completion(
+            model="chatgpt/gpt-5.5",
+            messages=[],
+        )
+
+    assert mock_call.call_args.kwargs["stream"] is True
+    assert resp == "streamed text"
+    assert finish_reason == "stop"
+    assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
