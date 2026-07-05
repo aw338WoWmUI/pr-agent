@@ -98,8 +98,11 @@ class GiteaProvider(GitProvider):
                 repo=self.repo,
                 pr_number=self.pr_number
             )
-            self.pr_commits = [self._as_commit(c) for c in (self.pr_commits or [])]
-            self.last_commit = self.pr_commits[-1] if self.pr_commits else self._as_commit({"sha": self.sha})
+            self.pr_commits = self._normalize_commits(self.pr_commits)
+            self.last_commit = (
+                next((c for c in self.pr_commits if getattr(c, "sha", None) == self.sha), None)
+                or (self.pr_commits[-1] if self.pr_commits else self._as_commit({"sha": self.sha}))
+            )
             self.last_commit_id = self.last_commit
             self.base_sha = self.pr.base.sha if self.pr.base.sha else ""
             self.base_ref = self.pr.base.ref if self.pr.base.ref else ""
@@ -714,7 +717,7 @@ class GiteaProvider(GitProvider):
             )
         # Normalize to adapters exposing .sha and .commit.author.date, so the
         # IncrementalPR accessors used by pr_reviewer work unchanged.
-        self.pr_commits = [self._as_commit(c) for c in (self.pr_commits or [])]
+        self.pr_commits = self._normalize_commits(self.pr_commits)
 
         self.previous_review = self.get_previous_review(full=True, incremental=True)
         push_before = get_settings().get("gitea.incremental_push_before_sha", None)
@@ -824,6 +827,17 @@ class GiteaProvider(GitProvider):
         if isinstance(comment, dict):
             return comment.get("body", "") or ""
         return getattr(comment, "body", "") or ""
+
+    @staticmethod
+    def _commit_date(commit):
+        from datetime import datetime, timezone
+
+        author = getattr(getattr(commit, "commit", None), "author", None)
+        return getattr(author, "date", None) or datetime.min.replace(tzinfo=timezone.utc)
+
+    @classmethod
+    def _normalize_commits(cls, commits):
+        return sorted([cls._as_commit(c) for c in (commits or [])], key=cls._commit_date)
 
     @staticmethod
     def _as_commit(commit):

@@ -33,14 +33,14 @@ class TestGiteaProvider:
         repo_api.get_pull_request_diff.return_value = ''
         repo_api.get_pr_commits.return_value = [
             {
-                'sha': 'old-pr-sha',
-                'html_url': 'https://gitea.example.com/owner/repo/commit/old-pr-sha',
-                'commit': {'author': {'date': '2024-01-01T00:00:00Z'}, 'message': 'old'},
-            },
-            {
                 'sha': 'pr-head',
                 'html_url': 'https://gitea.example.com/owner/repo/commit/pr-head',
                 'commit': {'author': {'date': '2024-01-02T00:00:00Z'}, 'message': 'head'},
+            },
+            {
+                'sha': 'old-pr-sha',
+                'html_url': 'https://gitea.example.com/owner/repo/commit/old-pr-sha',
+                'commit': {'author': {'date': '2024-01-01T00:00:00Z'}, 'message': 'old'},
             },
         ]
 
@@ -1595,8 +1595,8 @@ class TestGiteaProviderIncremental:
         from pr_agent.git_providers.git_provider import IncrementalPR
         # Two commits: one before the review, one after.
         commits = [
-            self._commit('old', '2024-01-01T00:00:00Z'),
             self._commit('new', '2024-01-03T00:00:00Z'),
+            self._commit('old', '2024-01-01T00:00:00Z'),
         ]
         review = MagicMock()
         from pr_agent.algo.utils import PRReviewHeader
