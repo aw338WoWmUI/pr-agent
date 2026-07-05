@@ -203,7 +203,8 @@ async def test_get_completion_uses_streaming_for_required_models():
 
 
 @pytest.mark.asyncio
-async def test_get_completion_uses_streaming_for_chatgpt_models():
+async def test_get_completion_uses_streaming_for_chatgpt_models(monkeypatch):
+    monkeypatch.setenv("CHATGPT_ALLOW_DEVICE_LOGIN", "true")
     handler = litellm_handler.LiteLLMAIHandler.__new__(litellm_handler.LiteLLMAIHandler)
     handler.streaming_required_models = []
 
@@ -222,3 +223,47 @@ async def test_get_completion_uses_streaming_for_chatgpt_models():
     assert resp == "streamed text"
     assert finish_reason == "stop"
     assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
+
+
+@pytest.mark.asyncio
+async def test_get_completion_disables_chatgpt_device_login_when_noninteractive(monkeypatch):
+    authenticator_module = pytest.importorskip("litellm.llms.chatgpt.authenticator")
+    common_utils = pytest.importorskip("litellm.llms.chatgpt.common_utils")
+    Authenticator = authenticator_module.Authenticator
+    GetAccessTokenError = common_utils.GetAccessTokenError
+
+    original_login = Authenticator._login_device_code
+    original_wait = Authenticator._wait_for_access_token
+    had_marker = hasattr(Authenticator, "_pr_agent_device_login_disabled")
+    original_marker = getattr(Authenticator, "_pr_agent_device_login_disabled", None)
+
+    monkeypatch.delenv("CHATGPT_ALLOW_DEVICE_LOGIN", raising=False)
+    monkeypatch.setattr(litellm_handler.sys.stdin, "isatty", lambda: False)
+    if had_marker:
+        delattr(Authenticator, "_pr_agent_device_login_disabled")
+
+    handler = litellm_handler.LiteLLMAIHandler.__new__(litellm_handler.LiteLLMAIHandler)
+    handler.streaming_required_models = []
+
+    try:
+        with patch("pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion", new_callable=AsyncMock) as mock_call, \
+                patch("pr_agent.algo.ai_handlers.litellm_ai_handler._handle_streaming_response",
+                      new_callable=AsyncMock) as mock_stream:
+            mock_call.return_value = "stream"
+            mock_stream.return_value = ("streamed text", "stop")
+
+            await handler._get_completion(
+                model="chatgpt/gpt-5.5",
+                messages=[],
+            )
+
+        with pytest.raises(GetAccessTokenError) as exc_info:
+            Authenticator.__new__(Authenticator)._login_device_code()
+        assert "interactive device login is disabled" in str(exc_info.value)
+    finally:
+        Authenticator._login_device_code = original_login
+        Authenticator._wait_for_access_token = original_wait
+        if had_marker:
+            Authenticator._pr_agent_device_login_disabled = original_marker
+        elif hasattr(Authenticator, "_pr_agent_device_login_disabled"):
+            delattr(Authenticator, "_pr_agent_device_login_disabled")

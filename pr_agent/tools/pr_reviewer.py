@@ -1,5 +1,6 @@
 import copy
 import datetime
+import re
 import traceback
 from collections import OrderedDict
 from functools import partial
@@ -27,6 +28,11 @@ from pr_agent.log import get_logger
 from pr_agent.servers.help import HelpMessage
 from pr_agent.tools.ticket_pr_compliance_check import (
     extract_and_cache_pr_tickets, extract_tickets)
+
+_SENSITIVE_ERROR_RE = re.compile(
+    r"(?i)\b(access_token|refresh_token|id_token|api[_-]?key|authorization)\b([\"'\s:=]+)([^\"'\s,`]+)"
+)
+_SECRET_LIKE_RE = re.compile(r"(?i)\b(sk-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+)\b")
 
 
 class PRReviewer:
@@ -194,6 +200,7 @@ class PRReviewer:
             self._publish_review_as_commit_status(pr_review)
         except Exception as e:
             get_logger().error(f"Failed to review PR: {e}")
+            self._publish_review_failure(e)
 
     def _publish_review_as_commit_status(self, pr_review: str) -> None:
         """Surface the review outcome as a commit status on the PR head.
@@ -224,6 +231,65 @@ class PRReviewer:
             )
         except Exception as e:
             get_logger().error(f"Failed to publish review commit status: {e}")
+
+    def _publish_review_failure(self, error: Exception) -> None:
+        if not get_settings().config.publish_output:
+            return
+        try:
+            body = self._format_review_failure(error)
+            temporary_comment = self._latest_temporary_comment()
+            if temporary_comment and hasattr(self.git_provider, "edit_comment"):
+                self.git_provider.edit_comment(temporary_comment, body)
+            else:
+                self.git_provider.publish_comment(body)
+            self._publish_review_failure_status()
+        except Exception as publish_error:
+            get_logger().error(f"Failed to publish review failure alert: {publish_error}")
+
+    def _latest_temporary_comment(self):
+        for comment in reversed(getattr(self.git_provider, "comments_list", []) or []):
+            if isinstance(comment, dict) and comment.get("is_temporary"):
+                return comment
+            if getattr(comment, "is_temporary", False):
+                return comment
+        return None
+
+    def _format_review_failure(self, error: Exception) -> str:
+        reason = self._safe_error_summary(error)
+        return (
+            "### PR-Agent 评审失败\n\n"
+            "PR-Agent 无法完成本次评审。\n\n"
+            f"原因：`{reason}`\n\n"
+            "这属于 PR-Agent 基础设施或模型鉴权问题，不是当前 PR 的代码结论。"
+            "请刷新模型鉴权或修复服务状态后重新触发 `/review`。"
+        )
+
+    def _safe_error_summary(self, error: Exception) -> str:
+        root = error
+        seen = set()
+        while getattr(root, "__cause__", None) and id(root.__cause__) not in seen:
+            seen.add(id(root))
+            root = root.__cause__
+        text = str(root) or str(error) or root.__class__.__name__
+        text = _SENSITIVE_ERROR_RE.sub(r"\1\2<redacted>", text)
+        text = _SECRET_LIKE_RE.sub("<redacted>", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:500] if text else root.__class__.__name__
+
+    def _publish_review_failure_status(self) -> None:
+        if not get_settings().get("gitea.publish_review_as_status", False):
+            return
+        if not hasattr(self.git_provider, "publish_commit_status"):
+            return
+        try:
+            self.git_provider.publish_commit_status(
+                state="error",
+                context="PR-Agent/review",
+                description="PR-Agent review failed",
+                target_url=self.git_provider.get_pr_url(),
+            )
+        except Exception as e:
+            get_logger().error(f"Failed to publish review failure commit status: {e}")
 
     def _should_publish_review_no_suggestions(self, pr_review: str) -> bool:
         return get_settings().pr_reviewer.get('publish_output_no_suggestions', True) or "No major issues detected" not in pr_review

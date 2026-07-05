@@ -14,6 +14,10 @@ GITHUB_TICKET_PATTERN = re.compile(
 )
 # Option A: issue number at start of branch or after /, followed by - or end (e.g. feature/1-test-issue, 123-fix)
 BRANCH_ISSUE_PATTERN = re.compile(r"(?:^|/)(\d{1,6})(?=-|$)")
+CLOSED_TICKET_EXPLICIT_CONTEXT_PATTERN = re.compile(
+    r"(?i)(acceptance|requirements?|context|according to|based on|use(?:d|s|ing)?|"
+    r"align(?:ed)? with|follow|against|validate|验收|需求|要求|上下文|按|根据|依据|对齐|参照|以.+为准)"
+)
 
 def find_jira_tickets(text):
     # Regular expression patterns for JIRA tickets
@@ -143,6 +147,41 @@ def _trim_ticket_body(body, max_characters):
     return body
 
 
+def _issue_is_closed(issue):
+    state = str(_issue_attr(issue, "state", "") or "").strip().lower()
+    return state in ("closed", "done", "resolved")
+
+
+def _ticket_issue_number(ticket_url):
+    match = re.search(r"/issues/(\d+)(?:$|[?#])", ticket_url)
+    return match.group(1) if match else ""
+
+
+def _closed_ticket_explicitly_requested(user_description, ticket_url):
+    issue_number = _ticket_issue_number(ticket_url)
+    if not issue_number:
+        return False
+    for line in (user_description or "").splitlines():
+        if (
+            ticket_url in line
+            or f"/issues/{issue_number}" in line
+            or f"#{issue_number}" in line
+        ) and CLOSED_TICKET_EXPLICIT_CONTEXT_PATTERN.search(line):
+            return True
+    return False
+
+
+def _should_use_ticket(issue, ticket_url, user_description):
+    if not _issue_is_closed(issue):
+        return True
+    if _closed_ticket_explicitly_requested(user_description, ticket_url):
+        return True
+    get_logger().info(
+        f"Skipping closed ticket {ticket_url}; PR description did not request it as review context"
+    )
+    return False
+
+
 def _build_ticket_content(ticket_url, issue, body, labels, sub_issues_content=None):
     return {
         'ticket_id': _issue_attr(issue, "number"),
@@ -190,6 +229,8 @@ async def extract_tickets(git_provider):
                         get_logger().error(f"Error getting main issue: {e}",
                                            artifact={"traceback": traceback.format_exc()})
                         continue
+                    if not _should_use_ticket(issue_main, ticket, user_description):
+                        continue
 
                     issue_body_str = issue_main.body or ""
                     if len(issue_body_str) > MAX_TICKET_CHARACTERS:
@@ -203,6 +244,8 @@ async def extract_tickets(git_provider):
                             try:
                                 sub_repo, sub_issue_number = git_provider._parse_issue_url(sub_issue_url)
                                 sub_issue = git_provider.repo_obj.get_issue(sub_issue_number)
+                                if not _should_use_ticket(sub_issue, sub_issue_url, user_description):
+                                    continue
 
                                 sub_body = sub_issue.body or ""
                                 if len(sub_body) > MAX_TICKET_CHARACTERS:
@@ -274,6 +317,8 @@ async def extract_tickets(git_provider):
                     get_logger().error(f"Error getting main issue: {e}",
                                        artifact={"traceback": traceback.format_exc()})
                     continue
+                if not _should_use_ticket(issue_main, ticket, user_description):
+                    continue
 
                 issue_body_str = _trim_ticket_body(
                     _issue_attr(issue_main, "body", ""), MAX_TICKET_CHARACTERS
@@ -288,6 +333,8 @@ async def extract_tickets(git_provider):
                             sub_issue = git_provider.repo_api.get_issue(
                                 owner=sub_owner, repo=sub_repo, index=sub_issue_number
                             )
+                            if not _should_use_ticket(sub_issue, sub_issue_url, user_description):
+                                continue
                             sub_issues_content.append(_build_ticket_content(
                                 sub_issue_url,
                                 sub_issue,

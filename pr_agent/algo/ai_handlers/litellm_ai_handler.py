@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 
 import litellm
 import openai
@@ -25,6 +26,10 @@ from pr_agent.log import get_logger
 
 MODEL_RETRIES = 2
 DUMMY_LITELLM_API_KEY = "dummy_key"  # placeholder set when no OpenAI key is configured
+CHATGPT_DEVICE_LOGIN_ERROR = (
+    "ChatGPT auth token expired and interactive device login is disabled for non-interactive PR-Agent. "
+    "Refresh the mounted ChatGPT auth file and retry /review."
+)
 
 
 class LiteLLMAIHandler(BaseAiHandler):
@@ -307,6 +312,38 @@ class LiteLLMAIHandler(BaseAiHandler):
             del os.environ["AWS_SESSION_TOKEN"]
         self._aws_imds_fell_back = True
         get_logger().warning("Bedrock call failed with ambient (IMDS) credentials; retrying with static credentials")
+
+    @staticmethod
+    def _chatgpt_device_login_allowed() -> bool:
+        value = os.environ.get("CHATGPT_ALLOW_DEVICE_LOGIN", "").strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        return sys.stdin.isatty()
+
+    @staticmethod
+    def _disable_chatgpt_device_login() -> None:
+        if LiteLLMAIHandler._chatgpt_device_login_allowed():
+            return
+        try:
+            from litellm.llms.chatgpt.authenticator import Authenticator
+            from litellm.llms.chatgpt.common_utils import GetAccessTokenError
+        except Exception as e:
+            get_logger().warning(f"Could not disable ChatGPT device login: {e}")
+            return
+        if getattr(Authenticator, "_pr_agent_device_login_disabled", False):
+            return
+
+        def _login_device_code_disabled(self):
+            raise GetAccessTokenError(message=CHATGPT_DEVICE_LOGIN_ERROR, status_code=401)
+
+        def _wait_for_access_token_disabled(self, timeout_seconds):
+            return None
+
+        Authenticator._login_device_code = _login_device_code_disabled
+        Authenticator._wait_for_access_token = _wait_for_access_token_disabled
+        Authenticator._pr_agent_device_login_disabled = True
 
     def prepare_logs(self, response, system, user, resp, finish_reason):
         response_log = response.dict().copy()
@@ -720,7 +757,10 @@ class LiteLLMAIHandler(BaseAiHandler):
         Wrapper that automatically handles streaming for required models.
         """
         model = kwargs["model"]
-        if model in self.streaming_required_models or model.startswith("chatgpt/"):
+        is_chatgpt_model = model.startswith("chatgpt/")
+        if model in self.streaming_required_models or is_chatgpt_model:
+            if is_chatgpt_model:
+                self._disable_chatgpt_device_login()
             kwargs["stream"] = True
             get_logger().info(f"Using streaming mode for model {model}")
             response = await acompletion(**kwargs)

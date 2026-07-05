@@ -28,11 +28,12 @@ class _FakeLabel:
 
 
 class _FakeIssue:
-    def __init__(self, number, title="t", body="b", labels=None):
+    def __init__(self, number, title="t", body="b", labels=None, state="open"):
         self.number = number
         self.title = title
         self.body = body
         self.labels = labels if labels is not None else []
+        self.state = state
 
 
 class _FakeRepoObj:
@@ -341,6 +342,23 @@ class TestSubIssues:
         subs = result[0]["sub_issues"]
         assert [s["ticket_url"] for s in subs] == [sub_good]
 
+    def test_closed_sub_issue_without_explicit_context_is_skipped(self, settings_snapshot):
+        repo_obj = _FakeRepoObj({
+            1: _FakeIssue(1, title="Main"),
+            99: _FakeIssue(99, title="Closed sub", state="closed"),
+        })
+        sub_url = "https://github.com/org/repo/issues/99"
+        provider = _make_github_provider(
+            user_description="Fixes #1",
+            repo_obj=repo_obj,
+            sub_issues_map={"https://github.com/org/repo/issues/1": [sub_url]},
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result and len(result) == 1
+        assert result[0]["sub_issues"] == []
+
 
 # ---------------------------------------------------------------------------
 # Scenario 6: labels — supports both object-style and string-style
@@ -490,6 +508,65 @@ class TestGiteaExtraction:
             "labels": "requirement",
             "sub_issues": [],
         }]
+
+    def test_closed_gitea_ticket_from_weak_reference_is_skipped(self, settings_snapshot):
+        repo_api = _FakeGiteaRepoApi({
+            ("ZeroIM", "ZeroIM", 1700): {
+                "number": 1700,
+                "title": "Old requirement",
+                "body": "stale acceptance criteria",
+                "labels": [{"name": "closed"}],
+                "state": "closed",
+            },
+        })
+        provider = _make_gitea_provider(
+            user_description="Refs #1700 for history.",
+            repo_api=repo_api,
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result == []
+
+    def test_closed_gitea_ticket_with_explicit_context_is_included(self, settings_snapshot):
+        repo_api = _FakeGiteaRepoApi({
+            ("ZeroIM", "ZeroIM", 1700): {
+                "number": 1700,
+                "title": "Accepted requirement",
+                "body": "explicit acceptance criteria",
+                "labels": [{"name": "closed"}],
+                "state": "closed",
+            },
+        })
+        provider = _make_gitea_provider(
+            user_description="按 #1700 验收本 PR 的文件助手能力。",
+            repo_api=repo_api,
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result and [ticket["ticket_id"] for ticket in result] == [1700]
+        assert result[0]["body"] == "explicit acceptance criteria"
+
+    def test_closed_branch_derived_ticket_is_skipped_without_pr_description_context(self, settings_snapshot):
+        repo_api = _FakeGiteaRepoApi({
+            ("ZeroIM", "ZeroIM", 77): {
+                "number": 77,
+                "title": "Closed branch issue",
+                "body": "stale branch body",
+                "labels": [],
+                "state": "closed",
+            },
+        })
+        provider = _make_gitea_provider(
+            user_description="No ticket context here.",
+            branch="feature/77-follow-up",
+            repo_api=repo_api,
+        )
+
+        result = asyncio.run(extract_tickets(provider))
+
+        assert result == []
 
 
 # ---------------------------------------------------------------------------

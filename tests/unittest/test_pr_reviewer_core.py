@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -198,3 +199,55 @@ def test_publish_review_as_commit_status_swallows_provider_errors():
         reviewer._publish_review_as_commit_status("## Review\n\nbody")
     finally:
         settings.set("gitea.publish_review_as_status", original)
+
+
+def test_publish_review_failure_edits_temporary_comment_and_redacts_secrets():
+    settings = get_settings()
+    original_publish_output = settings.config.publish_output
+    original_status = settings.get("gitea.publish_review_as_status", False)
+    try:
+        settings.config.publish_output = True
+        settings.set("gitea.publish_review_as_status", True)
+        provider = MagicMock()
+        provider.comments_list = [{"is_temporary": True, "comment_id": 7}]
+        provider.get_pr_url.return_value = "https://gitea.example.com/o/r/pulls/1"
+        reviewer = _make_reviewer(provider)
+
+        reviewer._publish_review_failure(RuntimeError("refresh_token = secret-refresh-token"))
+
+        provider.edit_comment.assert_called_once()
+        body = provider.edit_comment.call_args.args[1]
+        assert "PR-Agent 评审失败" in body
+        assert "secret-refresh-token" not in body
+        assert "<redacted>" in body
+        provider.publish_comment.assert_not_called()
+        provider.publish_commit_status.assert_called_once()
+        assert provider.publish_commit_status.call_args.kwargs["state"] == "error"
+    finally:
+        settings.config.publish_output = original_publish_output
+        settings.set("gitea.publish_review_as_status", original_status)
+
+
+def test_run_publishes_failure_alert_when_prediction_fails(monkeypatch):
+    from pr_agent.tools import pr_reviewer as pr_reviewer_module
+
+    settings = get_settings()
+    original_publish_output = settings.config.publish_output
+    try:
+        settings.config.publish_output = True
+        provider = MagicMock()
+        provider.get_files.return_value = ["file.py"]
+        reviewer = _make_reviewer(provider)
+        reviewer.incremental = SimpleNamespace(is_incremental=False)
+        reviewer._publish_review_failure = MagicMock()
+
+        async def _fail(*args, **kwargs):
+            raise RuntimeError("auth failed")
+
+        monkeypatch.setattr(pr_reviewer_module, "retry_with_fallback_models", _fail)
+
+        asyncio.run(reviewer.run())
+
+        reviewer._publish_review_failure.assert_called_once()
+    finally:
+        settings.config.publish_output = original_publish_output
