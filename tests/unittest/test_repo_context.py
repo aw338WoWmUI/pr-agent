@@ -33,6 +33,14 @@ class UnsupportedProvider:
     get_repo_file_content = GitProvider.get_repo_file_content
 
 
+def set_repo_context_files(settings, value):
+    for stored_key in list(settings.config.keys()):
+        if stored_key.lower() == "repo_context_files":
+            settings.config.pop(stored_key, None)
+            break
+    settings.set("CONFIG.REPO_CONTEXT_FILES", value, merge=False)
+
+
 @pytest.fixture
 def repo_context_settings():
     settings = get_settings()
@@ -44,14 +52,14 @@ def repo_context_settings():
 
     yield settings
 
-    settings.set("CONFIG.REPO_CONTEXT_FILES", original_files)
+    set_repo_context_files(settings, original_files)
     settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", original_max_lines)
     settings.set("CONFIG.REPO_CONTEXT_FROM_DEFAULT_BRANCH", original_from_default_branch)
     repo_context._unsupported_repo_context_provider_classes = original_warned_provider_classes
     repo_context._repo_context_process_cache = original_process_cache
 
 
-def test_default_config_ships_agents_md_as_repo_context():
+def test_default_config_disables_repo_context_by_default():
     import tomllib
     from pathlib import Path
 
@@ -61,13 +69,12 @@ def test_default_config_ships_agents_md_as_repo_context():
     with open(config_path, "rb") as config_file:
         config = tomllib.load(config_file)
 
-    assert config["config"]["repo_context_files"] == ["AGENTS.md"]
-    # Reading from the default branch is the secure default.
+    assert config["config"]["repo_context_files"] == []
     assert config["config"]["repo_context_from_default_branch"] is True
 
 
 def test_build_repo_context_reads_from_default_branch_by_default(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_FROM_DEFAULT_BRANCH", True)
     provider = FakeProvider({"AGENTS.md": "Repo purpose"})
 
@@ -77,7 +84,7 @@ def test_build_repo_context_reads_from_default_branch_by_default(repo_context_se
 
 
 def test_build_repo_context_reads_from_target_branch_when_disabled(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_FROM_DEFAULT_BRANCH", False)
     provider = FakeProvider({"AGENTS.md": "Repo purpose"})
 
@@ -98,7 +105,7 @@ def test_build_repo_context_reads_from_target_branch_when_disabled(repo_context_
     ],
 )
 def test_build_repo_context_parses_string_default_branch_flag(repo_context_settings, config_value, expected):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_FROM_DEFAULT_BRANCH", config_value)
     provider = FakeProvider({"AGENTS.md": "Repo purpose"})
 
@@ -108,7 +115,7 @@ def test_build_repo_context_parses_string_default_branch_flag(repo_context_setti
 
 
 def test_build_repo_context_fetches_and_formats_configured_files(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md", "CONTRIBUTING.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md", "CONTRIBUTING.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     provider = FakeProvider({
         "AGENTS.md": "# Agent Guide\nUse focused tests.",
@@ -137,7 +144,7 @@ def test_build_repo_context_fetches_and_formats_configured_files(repo_context_se
 
 
 def test_build_repo_context_reuses_provider_cache_for_same_config(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md", "CONTRIBUTING.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md", "CONTRIBUTING.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     provider = FakeProvider({
         "AGENTS.md": "Repo purpose",
@@ -152,7 +159,7 @@ def test_build_repo_context_reuses_provider_cache_for_same_config(repo_context_s
 
 
 def test_build_repo_context_reuses_process_cache_for_same_pr_url(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     first_provider = FakeProvider({"AGENTS.md": "Repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
     second_provider = FakeProvider({"AGENTS.md": "Changed repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
@@ -168,7 +175,7 @@ def test_build_repo_context_reuses_process_cache_for_same_pr_url(repo_context_se
 
 
 def test_build_repo_context_refreshes_process_cache_after_ttl(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     first_provider = FakeProvider({"AGENTS.md": "Repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
     second_provider = FakeProvider({"AGENTS.md": "Changed repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
@@ -184,7 +191,7 @@ def test_build_repo_context_refreshes_process_cache_after_ttl(repo_context_setti
 
 
 def test_build_repo_context_refreshes_empty_process_cache_after_ttl(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     first_provider = FakeProvider({}, pr_url="https://example.com/org/repo/pull/1")
     second_provider = FakeProvider({"AGENTS.md": "Repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
@@ -214,14 +221,14 @@ def test_repo_context_cache_evicts_oldest_entry_when_full():
 
 
 def test_get_repo_context_config_normalizes_inputs(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", "AGENTS.md")
+    set_repo_context_files(repo_context_settings, "AGENTS.md")
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", "12")
 
     assert repo_context._get_repo_context_config() == (["AGENTS.md"], 12)
 
 
 def test_get_repo_context_config_rejects_non_list_container(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", {"AGENTS.md": True})
+    set_repo_context_files(repo_context_settings, {"AGENTS.md": True})
 
     assert repo_context._get_repo_context_config() is None
 
@@ -266,7 +273,7 @@ def test_load_repo_context_files_reports_fetch_errors():
 
 
 def test_build_repo_context_process_cache_invalidates_when_config_changes(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     first_provider = FakeProvider({
         "AGENTS.md": "Repo purpose",
@@ -278,7 +285,7 @@ def test_build_repo_context_process_cache_invalidates_when_config_changes(repo_c
     }, pr_url="https://example.com/org/repo/pull/1")
 
     first_context = build_repo_context(first_provider)
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["CONTRIBUTING.md"])
+    set_repo_context_files(repo_context_settings, ["CONTRIBUTING.md"])
     second_context = build_repo_context(second_provider)
 
     assert "Repo purpose" in first_context
@@ -288,7 +295,7 @@ def test_build_repo_context_process_cache_invalidates_when_config_changes(repo_c
 
 
 def test_build_repo_context_does_not_cache_empty_context_after_fetch_error(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     provider = FakeProvider({"AGENTS.md": "Repo purpose"}, pr_url="https://example.com/org/repo/pull/1")
     provider.get_repo_file_content = Mock(side_effect=[Exception("temporary outage"), "Repo purpose"])
@@ -302,7 +309,7 @@ def test_build_repo_context_does_not_cache_empty_context_after_fetch_error(repo_
 
 
 def test_build_repo_context_cache_invalidates_when_repo_context_files_change(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 500)
     provider = FakeProvider({
         "AGENTS.md": "Repo purpose",
@@ -310,7 +317,7 @@ def test_build_repo_context_cache_invalidates_when_repo_context_files_change(rep
     })
 
     first_context = build_repo_context(provider)
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["CONTRIBUTING.md"])
+    set_repo_context_files(repo_context_settings, ["CONTRIBUTING.md"])
     second_context = build_repo_context(provider)
 
     assert "Repo purpose" in first_context
@@ -319,7 +326,7 @@ def test_build_repo_context_cache_invalidates_when_repo_context_files_change(rep
 
 
 def test_build_repo_context_cache_invalidates_when_line_budget_changes(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 9)
     provider = FakeProvider({"AGENTS.md": "one\ntwo\nthree"})
 
@@ -386,7 +393,7 @@ def test_render_instruction_files_with_line_budget_uses_longer_fence_for_conflic
 
 
 def test_build_repo_context_skips_invalid_missing_and_empty_files(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["", 7, "MISSING.md", "EMPTY.md", "AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["", 7, "MISSING.md", "EMPTY.md", "AGENTS.md"])
     provider = FakeProvider({"EMPTY.md": "", "AGENTS.md": "Loaded context"})
 
     assert build_repo_context(provider) == (
@@ -403,7 +410,7 @@ def test_build_repo_context_skips_invalid_missing_and_empty_files(repo_context_s
 
 
 def test_build_repo_context_enforces_total_line_cap(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md", "CONTRIBUTING.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md", "CONTRIBUTING.md"])
     repo_context_settings.set("CONFIG.REPO_CONTEXT_MAX_LINES", 4)
     provider = FakeProvider({
         "AGENTS.md": "one\ntwo\nthree",
@@ -439,13 +446,13 @@ def test_render_instruction_files_with_line_budget_never_exceeds_configured_budg
 
 
 def test_build_repo_context_returns_empty_when_no_files_configured(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", [])
+    set_repo_context_files(repo_context_settings, [])
 
     assert build_repo_context(FakeProvider({"AGENTS.md": "repo purpose"})) == ""
 
 
 def test_build_repo_context_treats_string_config_as_single_file(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", "AGENTS.md")
+    set_repo_context_files(repo_context_settings, "AGENTS.md")
     provider = FakeProvider({"AGENTS.md": "repo purpose"})
 
     assert build_repo_context(provider) == (
@@ -462,7 +469,7 @@ def test_build_repo_context_treats_string_config_as_single_file(repo_context_set
 
 
 def test_build_repo_context_skips_non_list_container(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", {"AGENTS.md": True})
+    set_repo_context_files(repo_context_settings, {"AGENTS.md": True})
     provider = FakeProvider({"AGENTS.md": "repo purpose"})
 
     assert build_repo_context(provider) == ""
@@ -470,7 +477,7 @@ def test_build_repo_context_skips_non_list_container(repo_context_settings):
 
 
 def test_build_repo_context_warns_once_for_provider_without_repo_file_fetching(repo_context_settings):
-    repo_context_settings.set("CONFIG.REPO_CONTEXT_FILES", ["AGENTS.md"])
+    set_repo_context_files(repo_context_settings, ["AGENTS.md"])
     provider = UnsupportedProvider()
 
     with patch("pr_agent.algo.repo_context.get_logger") as mock_get_logger:
