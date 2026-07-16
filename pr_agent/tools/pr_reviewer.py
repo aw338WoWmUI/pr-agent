@@ -429,7 +429,6 @@ class PRReviewer:
             return getattr(value, name, default)
 
         bot_login = str(get_settings().get("gitea.bot_user", "pr-agent") or "pr-agent").lower()
-        command_names = {"/review", "/improve", "/describe", "/answer", "/ask", "/help"}
         review_headers = (
             PRReviewHeader.REGULAR.value,
             PRReviewHeader.INCREMENTAL.value,
@@ -445,7 +444,7 @@ class PRReviewer:
             user_type = str(field(user, "type") or "").lower()
             if login.lower() == bot_login or user_type == "bot":
                 continue
-            if body.split(maxsplit=1)[0].lower() in command_names:
+            if body.startswith("/"):
                 continue
             if body.startswith(review_headers):
                 continue
@@ -459,10 +458,11 @@ class PRReviewer:
         remaining = max(1, int(config.get("max_pr_comment_chars", 12000)))
         selected = []
         for entry in reversed(entries[-max_comments:]):
-            if remaining <= 0:
+            separator_length = 2 if selected else 0
+            if remaining <= separator_length:
                 break
-            selected.append(entry[:remaining])
-            remaining -= len(selected[-1])
+            selected.append(entry[:remaining - separator_length])
+            remaining -= len(selected[-1]) + separator_length
         return "\n\n".join(reversed(selected))
 
     def _get_previous_review_comment(self):

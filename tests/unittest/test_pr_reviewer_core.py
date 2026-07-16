@@ -106,7 +106,9 @@ def test_pr_comment_context_keeps_human_rebuttals_and_filters_bot_output():
             "created_at": "2026-07-16T10:00:00Z",
         },
         {"body": "## PR Reviewer Guide\nOld generated finding", "user": {"login": "PR-Agent"}},
+        {"body": "Third-party bot output", "user": {"login": "automation", "type": "Bot"}},
         {"body": "/review", "user": {"login": "alice"}},
+        {"body": "/config --show", "user": {"login": "bob"}},
     ]
     reviewer = _make_reviewer(provider)
 
@@ -118,7 +120,33 @@ def test_pr_comment_context_keeps_human_rebuttals_and_filters_bot_output():
     assert "alice" in context
     assert "false alarm" in context
     assert "Old generated finding" not in context
+    assert "Third-party bot output" not in context
     assert "/review" not in context
+    assert "/config --show" not in context
+
+
+def test_pr_comment_context_honors_total_character_limit():
+    settings = get_settings()
+    original_enabled = settings.pr_reviewer.get("include_pr_comments", False)
+    original_limit = settings.pr_reviewer.get("max_pr_comment_chars", 12000)
+    settings.pr_reviewer.include_pr_comments = True
+    settings.pr_reviewer.max_pr_comment_chars = 40
+    provider = MagicMock()
+    provider.is_supported.return_value = True
+    provider.get_issue_comments.return_value = [
+        {"body": "Older implementation context", "user": {"login": "alice"}},
+        {"body": "Newest rebuttal context", "user": {"login": "bob"}},
+    ]
+    reviewer = _make_reviewer(provider)
+
+    try:
+        context = reviewer._get_pr_comments_context()
+    finally:
+        settings.pr_reviewer.include_pr_comments = original_enabled
+        settings.pr_reviewer.max_pr_comment_chars = original_limit
+
+    assert len(context) <= 40
+    assert "Newest rebuttal context" in context
 
 
 def test_init_maps_user_question_and_answer_to_correct_prompt_vars(monkeypatch):
