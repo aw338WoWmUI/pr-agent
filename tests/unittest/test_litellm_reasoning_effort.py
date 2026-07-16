@@ -1,6 +1,11 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import litellm
 import pytest
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 
 import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_handler
 from pr_agent.algo.ai_handlers.litellm_ai_handler import LiteLLMAIHandler
@@ -153,7 +158,7 @@ class TestLiteLLMReasoningEffort:
         ("effort", "expected"),
         [
             ("xhigh", "xhigh"),
-            ("max", {"effort": "max"}),
+            ("max", {"effort": "max", "summary": "auto"}),
         ],
     )
     async def test_gpt5_valid_highest_reasoning_efforts(
@@ -179,6 +184,55 @@ class TestLiteLLMReasoningEffort:
             assert call_kwargs["reasoning_effort"] == expected
             assert "reasoning_effort" in call_kwargs["allowed_openai_params"]
             mock_logger.info.assert_any_call(f"Using reasoning_effort='{effort}' for GPT-5 model")
+
+    @pytest.mark.asyncio
+    async def test_gpt5_max_reaches_responses_request(self, monkeypatch, mock_logger):
+        fake_settings = create_mock_settings("max")
+        monkeypatch.setattr(litellm_handler, "get_settings", lambda: fake_settings)
+
+        with patch(
+            "pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion",
+            new_callable=AsyncMock,
+        ) as mock_completion:
+            mock_completion.return_value = create_mock_acompletion_response()
+            await LiteLLMAIHandler().chat_completion(
+                model="gpt-5.6-sol",
+                system="test system",
+                user="test user",
+            )
+
+        reasoning_effort = mock_completion.call_args.kwargs["reasoning_effort"]
+        model = "openai/gpt-5.6-sol"
+        original_model_info = litellm.model_cost.get(model)
+        litellm.register_model({model: {"mode": "responses", "litellm_provider": "openai"}})
+        try:
+            with patch(
+                "litellm.completion_extras.responses_api_bridge.completion",
+                return_value="captured",
+            ) as bridge:
+                litellm.completion(
+                    model=model,
+                    messages=[{"role": "user", "content": "test"}],
+                    reasoning_effort=reasoning_effort,
+                    stream=True,
+                    api_key="test",
+                )
+        finally:
+            if original_model_info is None:
+                litellm.model_cost.pop(model, None)
+            else:
+                litellm.model_cost[model] = original_model_info
+
+        optional_params = bridge.call_args.kwargs["optional_params"]
+        request = LiteLLMResponsesTransformationHandler().transform_request(
+            model="gpt-5.6-sol",
+            messages=[{"role": "user", "content": "test"}],
+            optional_params=optional_params,
+            litellm_params={"stream": True},
+            headers={},
+            litellm_logging_obj=SimpleNamespace(),
+        )
+        assert request["reasoning"]["effort"] == "max"
 
     @pytest.mark.asyncio
     async def test_gpt5_valid_reasoning_effort_minimal(self, monkeypatch, mock_logger):

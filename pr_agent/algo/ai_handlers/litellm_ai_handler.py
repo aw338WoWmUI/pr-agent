@@ -532,7 +532,9 @@ class LiteLLMAIHandler(BaseAiHandler):
 
                     thinking_kwargs_gpt5 = {
                         "reasoning_effort": (
-                            {"effort": effort} if effort == ReasoningEffort.MAX.value else effort
+                            {"effort": effort, "summary": "auto"}
+                            if effort == ReasoningEffort.MAX.value
+                            else effort
                         ),
                         "allowed_openai_params": ["reasoning_effort"],
                     }
