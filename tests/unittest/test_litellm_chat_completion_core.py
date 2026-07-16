@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -87,6 +88,26 @@ async def test_empty_stream_preserves_failure_reason():
         match="Empty streaming response received without proper completion",
     ):
         await _handle_streaming_response(empty_stream())
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_covers_response_consumption(monkeypatch):
+    async def slow_stream():
+        await asyncio.sleep(1)
+        if False:
+            yield None
+
+    async def fake_completion(**kwargs):
+        return slow_stream()
+
+    monkeypatch.setattr(litellm_handler, "acompletion", fake_completion)
+    handler = litellm_handler.LiteLLMAIHandler()
+
+    with pytest.raises(
+        litellm_handler.openai.APIError,
+        match="LLM request exceeded timeout of 0.01s",
+    ):
+        await handler._get_completion(model="chatgpt/gpt-5.6-sol", timeout=0.01)
 
 
 @pytest.mark.asyncio

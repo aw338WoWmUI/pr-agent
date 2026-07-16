@@ -760,22 +760,30 @@ class LiteLLMAIHandler(BaseAiHandler):
         """
         Wrapper that automatically handles streaming for required models.
         """
-        model = kwargs["model"]
-        is_chatgpt_model = model.startswith("chatgpt/")
-        if model in self.streaming_required_models or is_chatgpt_model:
-            if is_chatgpt_model:
-                self._disable_chatgpt_device_login()
-            kwargs["stream"] = True
-            get_logger().info(f"Using streaming mode for model {model}")
-            response = await acompletion(**kwargs)
-            resp, finish_reason = await _handle_streaming_response(response)
-            # Create MockResponse for streaming since we don't have the full response object
-            mock_response = MockResponse(resp, finish_reason)
-            return resp, finish_reason, mock_response
-        else:
-            response = await acompletion(**kwargs)
-            if response is None or len(response["choices"]) == 0:
-                raise openai.APIError("Empty response received", request=None, body=None)
-            return (response["choices"][0]['message']['content'],
-                    response["choices"][0]["finish_reason"],
-                    response)
+        timeout = kwargs.get("timeout")
+        try:
+            async with asyncio.timeout(timeout):
+                model = kwargs["model"]
+                is_chatgpt_model = model.startswith("chatgpt/")
+                if model in self.streaming_required_models or is_chatgpt_model:
+                    if is_chatgpt_model:
+                        self._disable_chatgpt_device_login()
+                    kwargs["stream"] = True
+                    get_logger().info(f"Using streaming mode for model {model}")
+                    response = await acompletion(**kwargs)
+                    resp, finish_reason = await _handle_streaming_response(response)
+                    mock_response = MockResponse(resp, finish_reason)
+                    return resp, finish_reason, mock_response
+
+                response = await acompletion(**kwargs)
+                if response is None or len(response["choices"]) == 0:
+                    raise openai.APIError("Empty response received", request=None, body=None)
+                return (response["choices"][0]['message']['content'],
+                        response["choices"][0]["finish_reason"],
+                        response)
+        except TimeoutError as exc:
+            raise openai.APIError(
+                f"LLM request exceeded timeout of {timeout}s",
+                request=None,
+                body=None,
+            ) from exc
