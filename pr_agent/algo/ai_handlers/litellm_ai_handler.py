@@ -530,9 +530,6 @@ class LiteLLMAIHandler(BaseAiHandler):
                                 f"Using default '{effort}'. Valid values: {[e.value for e in ReasoningEffort]}"
                             )
 
-                    if effort == ReasoningEffort.MAX.value and not model_base.startswith("gpt-5.6"):
-                        effort = ReasoningEffort.XHIGH.value
-
                     thinking_kwargs_gpt5 = {
                         "reasoning_effort": (
                             {"effort": effort, "summary": "auto"}
