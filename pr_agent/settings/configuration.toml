@@ -69,7 +69,7 @@ bot_user_indicators = ["codium", "bot_", "bot-", "_bot", "-bot"]
 restricted_mode = false # when true, skip operations that require elevated permissions (e.g. pushing code to the repository)
 is_auto_command = false # will be auto-set to true if the command is triggered by an automation
 enable_ai_metadata = false # will enable adding ai metadata
-reasoning_effort = "medium" # "none", "minimal", "low", "medium", "high", "xhigh"
+reasoning_effort = "medium" # "none", "minimal", "low", "medium", "high", "xhigh", "max"
 # extended thinking for Claude reasoning models
 enable_claude_extended_thinking = false # Set to true to enable extended thinking feature
 extended_thinking_budget_tokens = 2048
@@ -102,6 +102,9 @@ require_ticket_analysis_review=true
 publish_output_no_suggestions=true # Set to "false" if you only need the reviewer's remarks (not labels, not "security audit", etc.) and want to avoid noisy "No major issues detected" comments.
 persistent_comment=true
 extra_instructions = ""
+include_pr_comments = false
+max_pr_comments = 10
+max_pr_comment_chars = 12000
 num_max_findings = 3
 final_update_message = true
 # review labels

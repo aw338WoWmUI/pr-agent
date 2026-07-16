@@ -149,25 +149,36 @@ class TestLiteLLMReasoningEffort:
             mock_logger.info.assert_any_call("Using reasoning_effort='high' for GPT-5 model")
 
     @pytest.mark.asyncio
-    async def test_gpt5_valid_reasoning_effort_xhigh(self, monkeypatch, mock_logger):
-        """Test GPT-5 with valid reasoning_effort='xhigh' from config."""
-        fake_settings = create_mock_settings("xhigh")
+    @pytest.mark.parametrize(
+        ("effort", "expected"),
+        [
+            ("xhigh", "xhigh"),
+            ("max", {"effort": "max"}),
+        ],
+    )
+    async def test_gpt5_valid_highest_reasoning_efforts(
+        self, monkeypatch, mock_logger, effort, expected
+    ):
+        fake_settings = create_mock_settings(effort)
         monkeypatch.setattr(litellm_handler, "get_settings", lambda: fake_settings)
 
-        with patch('pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion', new_callable=AsyncMock) as mock_completion:
+        with patch(
+            "pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion",
+            new_callable=AsyncMock,
+        ) as mock_completion:
             mock_completion.return_value = create_mock_acompletion_response()
 
             handler = LiteLLMAIHandler()
             await handler.chat_completion(
-                model="gpt-5.2",
+                model="gpt-5.6-sol",
                 system="test system",
                 user="test user"
             )
 
             call_kwargs = mock_completion.call_args[1]
-            assert call_kwargs["reasoning_effort"] == "xhigh"
+            assert call_kwargs["reasoning_effort"] == expected
             assert "reasoning_effort" in call_kwargs["allowed_openai_params"]
-            mock_logger.info.assert_any_call("Using reasoning_effort='xhigh' for GPT-5 model")
+            mock_logger.info.assert_any_call(f"Using reasoning_effort='{effort}' for GPT-5 model")
 
     @pytest.mark.asyncio
     async def test_gpt5_valid_reasoning_effort_minimal(self, monkeypatch, mock_logger):

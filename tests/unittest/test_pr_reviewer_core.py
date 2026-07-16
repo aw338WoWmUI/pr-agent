@@ -93,6 +93,34 @@ def test_get_user_answers_collects_question_and_answer_from_issue_comments():
     assert answer == "/answer Because it fixes production."
 
 
+def test_pr_comment_context_keeps_human_rebuttals_and_filters_bot_output():
+    settings = get_settings()
+    original = settings.pr_reviewer.get("include_pr_comments", False)
+    settings.pr_reviewer.include_pr_comments = True
+    provider = MagicMock()
+    provider.is_supported.return_value = True
+    provider.get_issue_comments.return_value = [
+        {
+            "body": "The null guard is in parseConfig(); this finding is a false alarm.",
+            "user": {"login": "alice"},
+            "created_at": "2026-07-16T10:00:00Z",
+        },
+        {"body": "## PR Reviewer Guide\nOld generated finding", "user": {"login": "PR-Agent"}},
+        {"body": "/review", "user": {"login": "alice"}},
+    ]
+    reviewer = _make_reviewer(provider)
+
+    try:
+        context = reviewer._get_pr_comments_context()
+    finally:
+        settings.pr_reviewer.include_pr_comments = original
+
+    assert "alice" in context
+    assert "false alarm" in context
+    assert "Old generated finding" not in context
+    assert "/review" not in context
+
+
 def test_init_maps_user_question_and_answer_to_correct_prompt_vars(monkeypatch):
     """Behavioral regression for the swapped-unpacking bug (#2496).
 

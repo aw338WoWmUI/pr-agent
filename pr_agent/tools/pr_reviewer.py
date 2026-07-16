@@ -72,6 +72,7 @@ class PRReviewer:
         self.patches_diff = None
         self.prediction = None
         question_str, answer_str = self._get_user_answers()
+        pr_comments = self._get_pr_comments_context()
         self.pr_description, self.pr_description_files = (
             self.git_provider.get_pr_description(split_changes_walkthrough=True))
         if (self.pr_description_files and get_settings().get("config.is_auto_command", False) and
@@ -99,6 +100,7 @@ class PRReviewer:
             'require_todo_scan': get_settings().pr_reviewer.get("require_todo_scan", False),
             'question_str': question_str,
             'answer_str': answer_str,
+            'pr_comments': pr_comments,
             "extra_instructions": get_settings().pr_reviewer.extra_instructions,
             "skills_context": get_skills_context(),
             "repo_context": build_repo_context(self.git_provider),
@@ -409,6 +411,59 @@ class PRReviewer:
                     break
 
         return question_str, answer_str
+
+    def _get_pr_comments_context(self) -> str:
+        config = get_settings().pr_reviewer
+        if (not config.get("include_pr_comments", False)
+                or not self.git_provider.is_supported("get_issue_comments")):
+            return ""
+        try:
+            comments = list(self.git_provider.get_issue_comments())
+        except Exception as error:
+            get_logger().warning(f"Failed to load PR comments: {error}")
+            return ""
+
+        def field(value, name, default=""):
+            if isinstance(value, dict):
+                return value.get(name, default)
+            return getattr(value, name, default)
+
+        bot_login = str(get_settings().get("gitea.bot_user", "pr-agent") or "pr-agent").lower()
+        command_names = {"/review", "/improve", "/describe", "/answer", "/ask", "/help"}
+        review_headers = (
+            PRReviewHeader.REGULAR.value,
+            PRReviewHeader.INCREMENTAL.value,
+            "Preparing review...",
+        )
+        entries = []
+        for comment in comments:
+            body = str(field(comment, "body") or "").strip()
+            if not body:
+                continue
+            user = field(comment, "user", {}) or {}
+            login = str(field(user, "login") or field(user, "username") or "unknown")
+            user_type = str(field(user, "type") or "").lower()
+            if login.lower() == bot_login or user_type == "bot":
+                continue
+            if body.split(maxsplit=1)[0].lower() in command_names:
+                continue
+            if body.startswith(review_headers):
+                continue
+            created_at = field(comment, "created_at")
+            if hasattr(created_at, "isoformat"):
+                created_at = created_at.isoformat()
+            header = f"[{login}{f' at {created_at}' if created_at else ''}]"
+            entries.append(f"{header}\n{body}")
+
+        max_comments = max(1, int(config.get("max_pr_comments", 10)))
+        remaining = max(1, int(config.get("max_pr_comment_chars", 12000)))
+        selected = []
+        for entry in reversed(entries[-max_comments:]):
+            if remaining <= 0:
+                break
+            selected.append(entry[:remaining])
+            remaining -= len(selected[-1])
+        return "\n\n".join(reversed(selected))
 
     def _get_previous_review_comment(self):
         """
