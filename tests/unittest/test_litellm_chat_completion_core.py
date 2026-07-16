@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_handler
+from pr_agent.algo.ai_handlers.litellm_helpers import _handle_streaming_response
 
 
 class FakeBox:
@@ -57,7 +58,8 @@ async def test_chat_completion_passes_seed_when_temperature_is_zero(monkeypatch)
 @pytest.mark.asyncio
 async def test_chat_completion_rejects_seed_for_claude_opus_4_8_default_temperature(monkeypatch):
     class FakeAPIError(Exception):
-        pass
+        def __init__(self, message, request=None, *, body=None):
+            super().__init__(message)
 
     monkeypatch.setattr(litellm_handler, "get_settings", lambda: FakeSettings(config_values={"seed": 123}))
     monkeypatch.setattr(litellm_handler.openai, "APIError", FakeAPIError)
@@ -69,8 +71,22 @@ async def test_chat_completion_rejects_seed_for_claude_opus_4_8_default_temperat
             await handler.chat_completion(model="claude-opus-4-8", system="sys", user="usr")
 
     assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value) == "Seed (123) is not supported with temperature (0.2) > 0"
     assert str(exc_info.value.__cause__) == "Seed (123) is not supported with temperature (0.2) > 0"
     mock_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_empty_stream_preserves_failure_reason():
+    async def empty_stream():
+        if False:
+            yield None
+
+    with pytest.raises(
+        litellm_handler.openai.APIError,
+        match="Empty streaming response received without proper completion",
+    ):
+        await _handle_streaming_response(empty_stream())
 
 
 @pytest.mark.asyncio

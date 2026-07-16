@@ -742,7 +742,7 @@ class LiteLLMAIHandler(BaseAiHandler):
                     raise
             except Exception as e:
                 get_logger().warning(f"Unknown error during LLM inference: {e}")
-                raise openai.APIError from e
+                raise openai.APIError(str(e), request=None, body=None) from e
 
             get_logger().debug(f"\nAI response:\n{resp}")
 
@@ -775,7 +775,7 @@ class LiteLLMAIHandler(BaseAiHandler):
         else:
             response = await acompletion(**kwargs)
             if response is None or len(response["choices"]) == 0:
-                raise openai.APIError
+                raise openai.APIError("Empty response received", request=None, body=None)
             return (response["choices"][0]['message']['content'],
                     response["choices"][0]["finish_reason"],
                     response)
