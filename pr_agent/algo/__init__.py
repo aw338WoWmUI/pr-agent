@@ -74,6 +74,7 @@ MAX_TOKENS = {
     'deepseek/deepseek-reasoner': 64000,  # 64K, but may be limited by config.max_model_tokens
     'deepseek/deepseek-v4-pro': 1000000,  # 1M, but may be limited by config.max_model_tokens
     'deepseek/deepseek-v4-flash': 1000000,  # 1M, but may be limited by config.max_model_tokens
+    'moonshot/kimi-k3': 1048576,  # 1M, but may be limited by config.max_model_tokens
     'openai/qwq-plus': 131072,  # 131K context length, but may be limited by config.max_model_tokens
     'replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1': 4096,
     'meta-llama/Llama-2-7b-chat-hf': 4096,
@@ -311,6 +312,7 @@ USER_MESSAGE_ONLY_MODELS = [
 
 NO_SUPPORT_TEMPERATURE_MODELS = [
     "deepseek/deepseek-reasoner",
+    "moonshot/kimi-k3",
     "o1-mini",
     "o1-mini-2024-09-12",
     "o1",
@@ -358,6 +360,7 @@ NO_SUPPORT_TEMPERATURE_MODELS = [
 ]
 
 SUPPORT_REASONING_EFFORT_MODELS = [
+    "moonshot/kimi-k3",
     "o3-mini",
     "o3-mini-2025-01-31",
     "o3",
