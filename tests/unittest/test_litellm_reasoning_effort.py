@@ -657,13 +657,13 @@ class TestLiteLLMReasoningEffort:
 
             handler = LiteLLMAIHandler()
             await handler.chat_completion(
-                model="moonshot/kimi-k3",
+                model="openai/k3",
                 system="test system",
                 user="test user",
             )
 
             call_kwargs = mock_completion.call_args.kwargs
-            assert call_kwargs["model"] == "moonshot/kimi-k3"
+            assert call_kwargs["model"] == "openai/k3"
             assert call_kwargs["reasoning_effort"] == "max"
             assert "reasoning_effort" in call_kwargs["allowed_openai_params"]
             assert "temperature" not in call_kwargs

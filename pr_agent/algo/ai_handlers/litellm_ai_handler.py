@@ -607,7 +607,7 @@ class LiteLLMAIHandler(BaseAiHandler):
 
                     get_logger().info(f"Adding reasoning_effort with value {reasoning_effort} to model {model}.")
                     kwargs["reasoning_effort"] = reasoning_effort
-                    if model == "moonshot/kimi-k3":
+                    if model == "openai/k3":
                         kwargs["allowed_openai_params"] = ["reasoning_effort"]
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
