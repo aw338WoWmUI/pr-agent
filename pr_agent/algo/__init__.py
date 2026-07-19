@@ -437,5 +437,6 @@ CLAUDE_EXTENDED_THINKING_MODELS = [
 
 # Models that require streaming mode
 STREAMING_REQUIRED_MODELS = [
-    "openai/qwq-plus"
+    "openai/qwq-plus",
+    "openai/k3",
 ]

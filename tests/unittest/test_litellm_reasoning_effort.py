@@ -652,7 +652,11 @@ class TestLiteLLMReasoningEffort:
         with patch(
             "pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion",
             new_callable=AsyncMock,
-        ) as mock_completion:
+        ) as mock_completion, patch(
+            "pr_agent.algo.ai_handlers.litellm_ai_handler._handle_streaming_response",
+            new_callable=AsyncMock,
+            return_value=("test", "stop"),
+        ):
             mock_completion.return_value = create_mock_acompletion_response()
 
             handler = LiteLLMAIHandler()
@@ -667,6 +671,7 @@ class TestLiteLLMReasoningEffort:
             assert call_kwargs["reasoning_effort"] == "max"
             assert "reasoning_effort" in call_kwargs["allowed_openai_params"]
             assert "temperature" not in call_kwargs
+            assert call_kwargs["stream"] is True
 
     # ========== Group 7: Edge Cases ==========
 

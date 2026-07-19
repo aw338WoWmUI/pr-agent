@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from pr_agent.algo import STREAMING_REQUIRED_MODELS
 import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_handler
 from pr_agent.algo.ai_handlers.litellm_helpers import _handle_streaming_response
 
@@ -237,6 +238,10 @@ async def test_get_completion_uses_streaming_for_required_models():
     assert resp == "streamed text"
     assert finish_reason == "stop"
     assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
+
+
+def test_kimi_k3_is_registered_as_streaming_required():
+    assert "openai/k3" in STREAMING_REQUIRED_MODELS
 
 
 @pytest.mark.asyncio
