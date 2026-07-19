@@ -98,7 +98,7 @@ class PRCodeSuggestions:
         try:
             if not self.git_provider.get_files():
                 get_logger().info(f"PR has no files: {self.pr_url}, skipping code suggestions")
-                return None
+                return True
 
             get_logger().info('Generating code suggestions for PR...')
             relevant_configs = {'pr_code_suggestions': dict(get_settings().pr_code_suggestions),
@@ -125,7 +125,7 @@ class PRCodeSuggestions:
             # Handle the case where the PR has no suggestions
             if (data is None or 'code_suggestions' not in data or not data['code_suggestions']):
                 await self.publish_no_suggestions()
-                return
+                return True
 
             # publish the suggestions
             if get_settings().config.publish_output:
@@ -177,14 +177,16 @@ class PRCodeSuggestions:
                     if int(get_settings().pr_code_suggestions.dual_publishing_score_threshold) > 0:
                         await self.dual_publishing(data)
                 else:
-                    await self.push_inline_code_suggestions(data)
+                    published = await self.push_inline_code_suggestions(data)
                     if self.progress_response:
                         self.git_provider.remove_comment(self.progress_response)
+                    return published
             else:
                 get_logger().info('Code suggestions generated for PR, but not published since publish_output is False.')
                 pr_body = self.generate_summarized_suggestions(data)
                 get_settings().data = {"artifact": pr_body}
-                return
+                return True
+            return True
         except Exception as e:
             get_logger().error(f"Failed to generate code suggestions for PR, error: {e}",
                                artifact={"traceback": traceback.format_exc()})
@@ -197,6 +199,7 @@ class PRCodeSuggestions:
                         self.git_provider.publish_comment(f"Failed to generate code suggestions for PR")
                     except Exception as e:
                         get_logger().exception(f"Failed to update persistent review, error: {e}")
+            return False
 
     async def add_self_review_text(self, pr_body):
         text = get_settings().pr_code_suggestions.code_suggestions_self_review_text
@@ -582,8 +585,10 @@ class PRCodeSuggestions:
         is_successful = self.git_provider.publish_code_suggestions(code_suggestions)
         if not is_successful:
             get_logger().info("Failed to publish code suggestions, trying to publish each suggestion separately")
+            is_successful = bool(code_suggestions)
             for code_suggestion in code_suggestions:
-                self.git_provider.publish_code_suggestions([code_suggestion])
+                is_successful = self.git_provider.publish_code_suggestions([code_suggestion]) and is_successful
+        return bool(is_successful)
 
     def dedent_code(self, relevant_file, relevant_lines_start, new_code_snippet):
         try:  # dedent code snippet

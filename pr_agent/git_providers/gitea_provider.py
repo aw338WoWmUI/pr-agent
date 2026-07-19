@@ -398,7 +398,7 @@ class GiteaProvider(GitProvider):
         self.publish_inline_comments([payload])
 
 
-    def publish_inline_comments(self, comments: List[Dict[str, Any]], body: str = "Inline comment") -> None:
+    def publish_inline_comments(self, comments: List[Dict[str, Any]], body: str = "Inline comment") -> bool:
         """Publish inline comments as a *submitted* COMMENT review.
 
         Previously this called ``create_inline_comment`` with no ``event``,
@@ -417,21 +417,46 @@ class GiteaProvider(GitProvider):
         ``{body, event: "COMMENT", comments[]}`` where each comment is
         ``{body, path, new_position, old_position}`` (Gitea CreatePullReviewOptions).
 
-        ``commit_id`` is deliberately omitted (same reasoning as
+        ``commit_id`` is deliberately omitted for ordinary comments (same reasoning as
         ``submit_review``): ``self.last_commit`` comes from
         ``repo_get_all_commits`` — the repository/default-branch commit list, not
         the PR's commits — so its sha is unrelated to the PR head. Pinning it
         would anchor the inline positions to the wrong commit; omitting it lets
         Gitea default to the PR head, which is where the positions were computed.
+        The ZeroIM blocking-improve path may set ``inline_suggestion_commit_id``
+        to a verified PR head and ``inline_suggestion_review_event`` to
+        ``REQUEST_CHANGES`` so suggestions cannot replace the formal gate state.
         """
-        response = self.repo_api.create_review(
+        event = getattr(self, "inline_suggestion_review_event", "COMMENT")
+        if event not in {"COMMENT", "REQUEST_CHANGES"}:
+            event = "COMMENT"
+        commit_id = getattr(self, "inline_suggestion_commit_id", None)
+        if commit_id:
+            try:
+                current = self.repo_api.get_pull_request(
+                    owner=self.owner, repo=self.repo, pr_number=self.pr_number
+                )
+                current_sha = current.head.sha if current and current.head else ""
+            except Exception as exc:
+                self.logger.error(f"Failed to verify PR head before inline review: {exc}")
+                return False
+            if current_sha != commit_id:
+                self.logger.warning(
+                    f"Skipping stale inline review for {commit_id[:8]}; current head is {current_sha[:8]}"
+                )
+                return False
+
+        create_kwargs = dict(
             owner=self.owner,
             repo=self.repo,
             pr_number=self.pr_number if self.enabled_pr else self.issue_number,
-            event="COMMENT",
+            event=event,
             body=body,
             comments=comments,
         )
+        if commit_id:
+            create_kwargs["commit_id"] = commit_id
+        response = self.repo_api.create_review(**create_kwargs)
 
         # ``create_review`` runs with ``_preload_content=False``, so a successful
         # call returns the ``(data, status, headers)`` tuple rather than a truthy
@@ -440,9 +465,10 @@ class GiteaProvider(GitProvider):
         status = response[1] if isinstance(response, tuple) and len(response) > 1 else None
         if status is not None and not (200 <= status < 300):
             self.logger.error(f"Failed to publish inline comment (status {status})")
-            return
+            return False
 
         self.logger.info("Inline comment published")
+        return True
 
     def submit_review(self, event: str, body: str = "") -> bool:
         """Submit a formal Gitea review on the PR.
@@ -570,10 +596,11 @@ class GiteaProvider(GitProvider):
             payload = dict(body=body, path=path, old_position=old_position,new_position = new_position)
             if title_body:
                 title_body = f"**Suggestion:** {title_body}"
-                self.publish_inline_comments([payload],title_body)
+                ok = self.publish_inline_comments([payload],title_body)
             else:
-                self.publish_inline_comments([payload])
-            published = True
+                ok = self.publish_inline_comments([payload])
+            if ok:
+                published = True
         return published
 
     def add_eyes_reaction(self, issue_comment_id: int, disable_eyes: bool = False) -> Optional[int]:

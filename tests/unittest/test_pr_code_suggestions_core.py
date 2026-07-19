@@ -163,7 +163,7 @@ async def test_push_inline_code_suggestions_falls_back_to_individual_publish_cal
         ),
     ]}
 
-    await tool.push_inline_code_suggestions(data)
+    result = await tool.push_inline_code_suggestions(data)
 
     assert git_provider.publish_code_suggestions.call_count == 3
     batch_call = git_provider.publish_code_suggestions.call_args_list[0].args[0]
@@ -180,3 +180,18 @@ async def test_push_inline_code_suggestions_falls_back_to_individual_publish_cal
     assert second_retry[0]["relevant_lines_start"] == 2
     assert second_retry[0]["relevant_lines_end"] == 2
     assert "```suggestion\n    return new_worker()" in second_retry[0]["body"]
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_push_inline_code_suggestions_reports_publish_failure():
+    git_provider = MagicMock()
+    git_provider.diff_files = []
+    git_provider.publish_code_suggestions.return_value = False
+    tool = _make_tool(git_provider)
+
+    result = await tool.push_inline_code_suggestions({"code_suggestions": [
+        _valid_suggestion(relevant_lines_start=2, relevant_lines_end=2),
+    ]})
+
+    assert result is False

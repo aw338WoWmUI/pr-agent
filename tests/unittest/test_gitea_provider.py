@@ -818,6 +818,31 @@ class TestGiteaProviderPublishInlineComments:
         assert kwargs['event'] == 'COMMENT'
         assert kwargs['event'] not in ('APPROVED', 'REQUEST_CHANGES')
 
+    def test_blocking_suggestions_pin_the_captured_head_and_request_changes(self):
+        provider = self._provider()
+        provider.inline_suggestion_review_event = 'REQUEST_CHANGES'
+        provider.inline_suggestion_commit_id = 'captured-head'
+        provider.repo_api.get_pull_request.return_value.head.sha = 'captured-head'
+        provider.repo_api.create_review.return_value = (None, 201, {})
+
+        result = provider.publish_inline_comments([{'body': 'fix'}])
+
+        _, kwargs = provider.repo_api.create_review.call_args
+        assert result is True
+        assert kwargs['event'] == 'REQUEST_CHANGES'
+        assert kwargs['commit_id'] == 'captured-head'
+
+    def test_blocking_suggestions_reject_a_stale_captured_head(self):
+        provider = self._provider()
+        provider.inline_suggestion_review_event = 'REQUEST_CHANGES'
+        provider.inline_suggestion_commit_id = 'old-head'
+        provider.repo_api.get_pull_request.return_value.head.sha = 'new-head'
+
+        result = provider.publish_inline_comments([{'body': 'stale'}])
+
+        assert result is False
+        provider.repo_api.create_review.assert_not_called()
+
     def test_publish_code_suggestions_reports_success(self):
         """The /improve caller retries when this returns falsy, so success must
         return True to avoid duplicate inline suggestion reviews."""
