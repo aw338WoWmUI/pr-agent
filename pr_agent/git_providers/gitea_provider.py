@@ -470,7 +470,9 @@ class GiteaProvider(GitProvider):
         self.logger.info("Inline comment published")
         return True
 
-    def submit_review(self, event: str, body: str = "") -> bool:
+    def submit_review(
+        self, event: str, body: str = "", commit_id: Optional[str] = None
+    ) -> bool:
         """Submit a formal Gitea review on the PR.
 
         Unlike ``publish_comment`` (an issue comment) this occupies a reviewer
@@ -479,11 +481,8 @@ class GiteaProvider(GitProvider):
         rejects a review whose reviewer is the PR author, so the configured
         token must belong to a dedicated bot account distinct from PR authors.
 
-        ``commit_id`` is deliberately omitted so Gitea anchors the review to the
-        PR head: ``self.last_commit`` comes from ``repo_get_all_commits`` (the
-        repository/default-branch commit list, not the PR's commits), so its sha
-        is unrelated to the PR head and could mis-attach or be rejected under
-        stricter branch protection.
+        Callers that captured the analyzed PR head can pass ``commit_id`` to
+        prevent a concurrent push from attaching a stale verdict to a new head.
 
         Returns True on success; failures are logged and swallowed so a failed
         formal review never breaks the underlying ``/review`` comment.
@@ -492,13 +491,16 @@ class GiteaProvider(GitProvider):
             self.logger.error("Cannot submit a review: not a pull request")
             return False
         try:
-            self.repo_api.create_review(
+            create_kwargs = dict(
                 owner=self.owner,
                 repo=self.repo,
                 pr_number=self.pr_number,
                 event=event,
                 body=body,
             )
+            if commit_id:
+                create_kwargs["commit_id"] = commit_id
+            self.repo_api.create_review(**create_kwargs)
             self.logger.info(
                 f"Submitted Gitea review event={event} on {self.owner}/{self.repo}#{self.pr_number}"
             )

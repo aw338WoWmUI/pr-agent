@@ -709,6 +709,22 @@ class TestGiteaProviderSubmitReview:
         _, kwargs = provider.repo_api.create_review.call_args
         assert 'commit_id' not in kwargs
 
+    def test_submit_review_pins_explicit_commit_id(self):
+        provider = self._provider()
+
+        assert provider.submit_review(
+            'APPROVED', body='exact head', commit_id='captured-head'
+        ) is True
+
+        provider.repo_api.create_review.assert_called_once_with(
+            owner='owner',
+            repo='repo',
+            pr_number=42,
+            event='APPROVED',
+            body='exact head',
+            commit_id='captured-head',
+        )
+
     def test_submit_review_returns_false_on_api_error(self):
         """A failed formal review must be swallowed (return False), never raised,
         so it cannot break the underlying /review comment."""
