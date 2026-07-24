@@ -149,6 +149,31 @@ def test_pr_comment_context_honors_total_character_limit():
     assert "Newest rebuttal context" in context
 
 
+def test_prepare_review_retains_the_rendered_review_data(monkeypatch):
+    from pr_agent.tools import pr_reviewer as pr_reviewer_module
+
+    parsed = {
+        "review": {
+            "security_concerns": "SECURITY_CONCERN: NO",
+            "blocking_issues": "BLOCKING_ISSUES: NO",
+            "key_issues_to_review": [{"issue_header": "[ADVISORY] follow up"}],
+        }
+    }
+    reviewer = _make_reviewer()
+    reviewer.prediction = "review: {}"
+    reviewer.incremental = SimpleNamespace(is_incremental=False)
+    reviewer.git_provider.is_supported.return_value = True
+    reviewer.git_provider.get_diff_files.return_value = []
+    reviewer.set_review_labels = MagicMock()
+
+    monkeypatch.setattr(pr_reviewer_module, "load_yaml", lambda *_args, **_kwargs: parsed)
+    monkeypatch.setattr(pr_reviewer_module, "github_action_output", lambda *_args: None)
+    monkeypatch.setattr(pr_reviewer_module, "convert_to_markdown_v2", lambda *_args, **_kwargs: "rendered")
+
+    assert reviewer._prepare_pr_review() == "rendered"
+    assert reviewer.review_data is parsed
+
+
 def test_init_maps_user_question_and_answer_to_correct_prompt_vars(monkeypatch):
     """Behavioral regression for the swapped-unpacking bug (#2496).
 

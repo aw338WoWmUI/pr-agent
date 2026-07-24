@@ -347,6 +347,7 @@ class PRReviewer:
                          keys_fix_yaml=["ticket_compliance_check", "estimated_effort_to_review_[1-5]:", "security_concerns:", "key_issues_to_review:",
                                         "relevant_file:", "relevant_line:", "suggestion:"],
                          first_key=first_key, last_key=last_key)
+        self.review_data = data
         github_action_output(data, 'review')
 
         if 'review' not in data:
