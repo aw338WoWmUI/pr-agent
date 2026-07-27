@@ -203,6 +203,8 @@ class PRReviewer:
         except Exception as e:
             get_logger().error(f"Failed to review PR: {e}")
             self._publish_review_failure(e)
+            if get_settings().config.get("propagate_tool_errors", False):
+                raise
 
     def _publish_review_as_commit_status(self, pr_review: str) -> None:
         """Surface the review outcome as a commit status on the PR head.

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 
+import httpx
 import litellm
 import openai
 import requests
@@ -59,7 +60,19 @@ class LiteLLMAIHandler(BaseAiHandler):
             openai.api_key = get_settings().openai.key
             litellm.openai_key = get_settings().openai.key
         elif 'OPENAI_API_KEY' not in os.environ:
-            litellm.api_key = DUMMY_LITELLM_API_KEY
+            # These are process-wide globals and __init__ runs per request, so drop any
+            # key a previous request's provider branch left behind — chat_completion()
+            # forwards a truthy litellm.api_key, which would authenticate this request
+            # with (and leak) the earlier one's credential. The provider branches below
+            # repopulate it for the current request.
+            litellm.api_key = None
+            # Keyless OpenAI-compatible endpoints (vLLM, LM Studio, ...) still need *some*
+            # key or the OpenAI SDK raises "The api_key client option must be set".
+            # The placeholder must live in litellm.openai_key, which LiteLLM only consults
+            # on the OpenAI-compatible path: the global litellm.api_key is checked ahead of
+            # provider env vars (OPENROUTER_API_KEY, AZURE_API_KEY, ...) in LiteLLM's
+            # resolution chain, so a placeholder there silently shadows them.
+            litellm.openai_key = DUMMY_LITELLM_API_KEY
         if os.environ.get("AWS_USE_IMDS", "").strip().lower() in ("1", "true", "yes"):
             import boto3
             import botocore.exceptions
@@ -779,13 +792,25 @@ class LiteLLMAIHandler(BaseAiHandler):
 
                 response = await acompletion(**kwargs)
                 if response is None or len(response["choices"]) == 0:
-                    raise openai.APIError("Empty response received", request=None, body=None)
-                return (response["choices"][0]['message']['content'],
-                        response["choices"][0]["finish_reason"],
-                        response)
+                    raise openai.APIError(
+                        "Empty response received",
+                        request=httpx.Request("POST", model),
+                        body=None,
+                    )
+                content = response["choices"][0]['message']['content']
+                finish_reason = response["choices"][0]["finish_reason"]
+                if not content:
+                    get_logger().warning(
+                        f"Empty content in model response, finish_reason: {finish_reason}")
+                    raise openai.APIError(
+                        f"Empty content in model response (finish_reason: {finish_reason})",
+                        request=httpx.Request("POST", model),
+                        body=None,
+                    )
+                return content, finish_reason, response
         except TimeoutError as exc:
             raise openai.APIError(
                 f"LLM request exceeded timeout of {timeout}s",
-                request=None,
+                request=httpx.Request("POST", kwargs["model"]),
                 body=None,
             ) from exc
