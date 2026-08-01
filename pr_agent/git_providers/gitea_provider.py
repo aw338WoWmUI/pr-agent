@@ -93,17 +93,7 @@ class GiteaProvider(GitProvider):
             self.sha = self.pr.head.sha if self.pr.head.sha else ""
             self.__add_file_content()
             self.__add_file_diff()
-            self.pr_commits = self.repo_api.get_pr_commits(
-                owner=self.owner,
-                repo=self.repo,
-                pr_number=self.pr_number
-            )
-            self.pr_commits = self._normalize_commits(self.pr_commits)
-            self.last_commit = (
-                next((c for c in self.pr_commits if getattr(c, "sha", None) == self.sha), None)
-                or (self.pr_commits[-1] if self.pr_commits else self._as_commit({"sha": self.sha}))
-            )
-            self.last_commit_id = self.last_commit
+            self._set_pr_commits()
             self.base_sha = self.pr.base.sha if self.pr.base.sha else ""
             self.base_ref = self.pr.base.ref if self.pr.base.ref else ""
             # Gitea's PR object exposes the merge base directly. Prefer it for
@@ -119,6 +109,28 @@ class GiteaProvider(GitProvider):
             self.enabled_issue = True
         else:
             self.pr_commits = None
+
+    def _set_pr_commits(self):
+        """Load the commits of the PR itself, not the commits of the repository's default branch."""
+        raw_commits = self.repo_api.get_pr_commits(
+            owner=self.owner,
+            repo=self.repo,
+            pr_number=self.pr_number
+        ) or []
+        if not isinstance(raw_commits, list):
+            self.logger.error(f"Unexpected PR commits payload type: {type(raw_commits)}")
+            raw_commits = []
+        self.pr_commits = self._normalize_commits(list(reversed(raw_commits)))
+        if not self.pr_commits:
+            self.logger.error("Failed to get PR commits")
+        # Fall back to a commit wrapping the PR head SHA (rather than None) so callers that
+        # dereference last_commit/last_commit_id (e.g. publish_inline_comments, the description
+        # header) always have a valid .sha, even when the commits endpoint returns nothing.
+        self.last_commit = next(
+            (commit for commit in self.pr_commits if getattr(commit, "sha", None) == self.sha),
+            self.pr_commits[-1] if self.pr_commits else self._as_commit({"sha": self.sha})
+        )
+        self.last_commit_id = self.last_commit
 
     def __add_file_content(self):
         for file in self.git_files:
@@ -250,6 +262,8 @@ class GiteaProvider(GitProvider):
 
         sha = getattr(commit, "sha", None) or getattr(self, "sha", "")
         if not sha:
+            return ""
+        if not (getattr(self, "base_url", None) and getattr(self, "owner", None) and getattr(self, "repo", None)):
             return ""
         return f"{self.base_url}/{self.owner}/{self.repo}/commit/{sha}"
 
@@ -956,6 +970,14 @@ class GiteaProvider(GitProvider):
         if current_file and current_patch:
             file_patches[current_file] = '\n'.join(current_patch)
         return file_patches
+
+    def _get_file_content_from_latest_commit(self, filename: str) -> str:
+        return self.repo_api.get_file_content(
+            owner=self.owner,
+            repo=self.repo,
+            commit_sha=self.last_commit.sha if self.last_commit else self.sha,
+            filepath=filename
+        )
 
     def get_diff_files(self) -> List[FilePatchInfo]:
         """Get files that were modified in the PR.
