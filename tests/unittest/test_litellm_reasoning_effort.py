@@ -644,7 +644,8 @@ class TestLiteLLMReasoningEffort:
             assert call_kwargs.get("allowed_openai_params") is None or "reasoning_effort" not in call_kwargs.get("allowed_openai_params", [])
 
     @pytest.mark.asyncio
-    async def test_kimi_k3_uses_max_reasoning_without_temperature(self, monkeypatch, mock_logger):
+    @pytest.mark.parametrize("model", ["openai/k3", "openai/k3-256k"])
+    async def test_kimi_k3_uses_max_reasoning_without_temperature(self, monkeypatch, mock_logger, model):
         """Kimi K3 must receive its only supported reasoning effort through LiteLLM."""
         fake_settings = create_mock_settings("max")
         monkeypatch.setattr(litellm_handler, "get_settings", lambda: fake_settings)
@@ -661,13 +662,13 @@ class TestLiteLLMReasoningEffort:
 
             handler = LiteLLMAIHandler()
             await handler.chat_completion(
-                model="openai/k3",
+                model=model,
                 system="test system",
                 user="test user",
             )
 
             call_kwargs = mock_completion.call_args.kwargs
-            assert call_kwargs["model"] == "openai/k3"
+            assert call_kwargs["model"] == model
             assert call_kwargs["reasoning_effort"] == "max"
             assert "reasoning_effort" in call_kwargs["allowed_openai_params"]
             assert "temperature" not in call_kwargs

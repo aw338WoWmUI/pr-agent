@@ -304,8 +304,8 @@ async def test_get_completion_uses_streaming_for_required_models():
     assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
 
 
-def test_kimi_k3_is_registered_as_streaming_required():
-    assert "openai/k3" in STREAMING_REQUIRED_MODELS
+def test_kimi_k3_variants_are_registered_as_streaming_required():
+    assert {"openai/k3", "openai/k3-256k"} <= set(STREAMING_REQUIRED_MODELS)
 
 
 @pytest.mark.asyncio
