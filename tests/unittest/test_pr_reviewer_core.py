@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -195,6 +196,38 @@ def test_can_run_incremental_review_skips_auto_mode_without_new_commit():
     reviewer.incremental = SimpleNamespace(first_new_commit_sha=None)
 
     assert reviewer._can_run_incremental_review() is False
+
+
+@pytest.mark.parametrize("last_seen", [
+    datetime.datetime.now() - datetime.timedelta(days=1),
+    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1),
+])
+def test_can_run_incremental_review_accepts_naive_and_aware_commit_dates(last_seen):
+    reviewer = _make_reviewer()
+    reviewer.is_auto = False
+    reviewer.incremental = SimpleNamespace(
+        commits_range=[SimpleNamespace(sha="new")],
+        last_seen_commit=SimpleNamespace(
+            commit=SimpleNamespace(author=SimpleNamespace(date=last_seen))
+        ),
+    )
+    settings = get_settings()
+    original = (
+        settings.pr_reviewer.minimal_commits_for_incremental_review,
+        settings.pr_reviewer.minimal_minutes_for_incremental_review,
+        settings.pr_reviewer.require_all_thresholds_for_incremental_review,
+    )
+    try:
+        settings.pr_reviewer.minimal_commits_for_incremental_review = 1
+        settings.pr_reviewer.minimal_minutes_for_incremental_review = 1
+        settings.pr_reviewer.require_all_thresholds_for_incremental_review = False
+        assert reviewer._can_run_incremental_review() is True
+    finally:
+        (
+            settings.pr_reviewer.minimal_commits_for_incremental_review,
+            settings.pr_reviewer.minimal_minutes_for_incremental_review,
+            settings.pr_reviewer.require_all_thresholds_for_incremental_review,
+        ) = original
 
 
 def test_set_review_labels_replaces_stale_review_labels_and_keeps_user_labels():
