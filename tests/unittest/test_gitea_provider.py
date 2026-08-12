@@ -1739,7 +1739,7 @@ class TestGiteaProviderIncremental:
         review = MagicMock()
         from pr_agent.algo.utils import PRReviewHeader
         review.body = f'{PRReviewHeader.REGULAR.value} 🔍'
-        review.created_at = datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc)
+        review.created_at = datetime.datetime(2024, 1, 2)
         provider = self._provider(pr_commits=commits, comments=[review])
         provider.repo_api.get_compare.return_value = {
             'commits': [{'files': [{'filename': 'changed.py', 'status': 'modified'}]}]

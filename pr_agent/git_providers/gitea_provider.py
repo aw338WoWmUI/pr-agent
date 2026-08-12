@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
@@ -811,10 +812,10 @@ class GiteaProvider(GitProvider):
         timestamp is the ``last_seen_commit`` (the incremental diff base). Mirrors
         github_provider.get_commit_range.
         """
-        last_review_time = self.previous_review.created_at
+        last_review_time = self._as_utc_datetime(self.previous_review.created_at)
         first_new_commit_index = None
         for index in range(len(self.pr_commits) - 1, -1, -1):
-            if self.pr_commits[index].commit.author.date > last_review_time:
+            if self._as_utc_datetime(self.pr_commits[index].commit.author.date) > last_review_time:
                 self.incremental.first_new_commit = self.pr_commits[index]
                 first_new_commit_index = index
             else:
@@ -872,11 +873,22 @@ class GiteaProvider(GitProvider):
         return getattr(comment, "body", "") or ""
 
     @staticmethod
-    def _commit_date(commit):
-        from datetime import datetime, timezone
+    def _as_utc_datetime(value):
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                value = None
+        if not isinstance(value, datetime):
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
+    @staticmethod
+    def _commit_date(commit):
         author = getattr(getattr(commit, "commit", None), "author", None)
-        return getattr(author, "date", None) or datetime.min.replace(tzinfo=timezone.utc)
+        return GiteaProvider._as_utc_datetime(getattr(author, "date", None))
 
     @classmethod
     def _normalize_commits(cls, commits):
@@ -891,16 +903,8 @@ class GiteaProvider(GitProvider):
         if not isinstance(commit, dict):
             return commit  # already an object with the needed attributes
 
-        from datetime import datetime, timezone
-
         def _parse_date(value):
-            if not value:
-                return datetime.min.replace(tzinfo=timezone.utc)
-            try:
-                # Gitea emits RFC 3339 (e.g. 2024-01-02T03:04:05Z).
-                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-            except Exception:
-                return datetime.min.replace(tzinfo=timezone.utc)
+            return GiteaProvider._as_utc_datetime(value)
 
         commit_obj = commit.get("commit") or {}
         author = commit_obj.get("author") or {}
