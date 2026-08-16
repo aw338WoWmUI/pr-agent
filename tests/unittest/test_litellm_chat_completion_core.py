@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import openai
 import pytest
 
-from pr_agent.algo import STREAMING_REQUIRED_MODELS
 import pr_agent.algo.ai_handlers.litellm_ai_handler as litellm_handler
 from pr_agent.algo.ai_handlers.litellm_helpers import _handle_streaming_response
 
@@ -56,22 +55,6 @@ async def test_chat_completion_passes_seed_when_temperature_is_zero(monkeypatch)
         await handler.chat_completion(model="gpt-4o", system="sys", user="usr", temperature=0)
 
     assert mock_call.call_args.kwargs["seed"] == 123
-
-
-@pytest.mark.asyncio
-async def test_anthropic_completion_uses_configured_output_cap(monkeypatch):
-    monkeypatch.setattr(
-        litellm_handler,
-        "get_settings",
-        lambda: FakeSettings(settings_values={"ANTHROPIC.MAX_TOKENS": "32768"}),
-    )
-
-    with patch("pr_agent.algo.ai_handlers.litellm_ai_handler.acompletion", new_callable=AsyncMock) as mock_call:
-        mock_call.return_value = _mock_response()
-        handler = litellm_handler.LiteLLMAIHandler()
-        await handler.chat_completion(model="anthropic/k3-256k", system="sys", user="usr")
-
-    assert mock_call.call_args.kwargs["max_tokens"] == 32768
 
 
 @pytest.mark.asyncio
@@ -318,10 +301,6 @@ async def test_get_completion_uses_streaming_for_required_models():
     assert resp == "streamed text"
     assert finish_reason == "stop"
     assert response_obj.dict()["choices"][0]["message"]["content"] == "streamed text"
-
-
-def test_kimi_k3_variants_are_registered_as_streaming_required():
-    assert {"openai/k3", "openai/k3-256k"} <= set(STREAMING_REQUIRED_MODELS)
 
 
 @pytest.mark.asyncio

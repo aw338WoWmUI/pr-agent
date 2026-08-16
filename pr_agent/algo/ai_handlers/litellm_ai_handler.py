@@ -721,22 +721,10 @@ class LiteLLMAIHandler(BaseAiHandler):
 
                     get_logger().info(f"Adding reasoning_effort with value {reasoning_effort} to model {model}.")
                     kwargs["reasoning_effort"] = reasoning_effort
-                    if model in {"openai/k3", "openai/k3-256k"}:
-                        kwargs["allowed_openai_params"] = ["reasoning_effort"]
 
                 # https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
                 if (model in self.claude_extended_thinking_models) and get_settings().config.get("enable_claude_extended_thinking", False):
                     kwargs = self._configure_claude_extended_thinking(model, kwargs)
-
-                # Anthropic-compatible reasoning providers need an explicit output
-                # allowance when their default is insufficient for thought plus reply.
-                if model.startswith("anthropic/"):
-                    try:
-                        anthropic_max_tokens = int(get_settings().get("ANTHROPIC.MAX_TOKENS", 0) or 0)
-                    except (TypeError, ValueError):
-                        anthropic_max_tokens = 0
-                    if anthropic_max_tokens > 0:
-                        kwargs["max_tokens"] = anthropic_max_tokens
 
                 if get_settings().litellm.get("enable_callbacks", False):
                     kwargs = self.add_litellm_callbacks(kwargs)

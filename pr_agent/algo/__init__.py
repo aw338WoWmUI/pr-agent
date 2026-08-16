@@ -74,8 +74,6 @@ MAX_TOKENS = {
     'deepseek/deepseek-reasoner': 64000,  # 64K, but may be limited by config.max_model_tokens
     'deepseek/deepseek-v4-pro': 1000000,  # 1M, but may be limited by config.max_model_tokens
     'deepseek/deepseek-v4-flash': 1000000,  # 1M, but may be limited by config.max_model_tokens
-    'openai/k3': 1048576,  # 1M, but may be limited by config.max_model_tokens
-    'openai/k3-256k': 262144,  # 256K, but may be limited by config.max_model_tokens
     'zai/glm-5.2': 200000,  # 200K, matching the Z.AI GLM-5/5.1 lineage, but may be limited by config.max_model_tokens
     'moonshot/kimi-k3': 262144,  # 256K, matching the Moonshot Kimi-k2.5/k2.6 lineage, but may be limited by config.max_model_tokens
     'openai/qwq-plus': 131072,  # 131K context length, but may be limited by config.max_model_tokens
@@ -331,8 +329,6 @@ USER_MESSAGE_ONLY_MODELS = [
 
 NO_SUPPORT_TEMPERATURE_MODELS = [
     "deepseek/deepseek-reasoner",
-    "openai/k3",
-    "openai/k3-256k",
     "o1-mini",
     "o1-mini-2024-09-12",
     "o1",
@@ -389,8 +385,6 @@ NO_SUPPORT_TEMPERATURE_MODELS = [
 ]
 
 SUPPORT_REASONING_EFFORT_MODELS = [
-    "openai/k3",
-    "openai/k3-256k",
     "o3-mini",
     "o3-mini-2025-01-31",
     "o3",
@@ -468,6 +462,4 @@ CLAUDE_EXTENDED_THINKING_MODELS = [
 # Models that require streaming mode
 STREAMING_REQUIRED_MODELS = [
     "openai/qwq-plus",
-    "openai/k3",
-    "openai/k3-256k",
 ]

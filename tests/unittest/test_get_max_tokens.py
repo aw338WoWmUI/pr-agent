@@ -5,19 +5,6 @@ from pr_agent.algo.utils import MAX_TOKENS, get_max_tokens
 
 
 class TestGetMaxTokens:
-
-    def test_kimi_k3_256k_model_max_tokens(self, monkeypatch):
-        fake_settings = type('', (), {
-            'config': type('', (), {
-                'custom_model_max_tokens': 0,
-                'max_model_tokens': 0
-            })()
-        })()
-
-        monkeypatch.setattr(utils, "get_settings", lambda: fake_settings)
-
-        assert get_max_tokens("openai/k3-256k") == 262144
-
     # Test if the file is in MAX_TOKENS
     def test_model_max_tokens(self, monkeypatch):
         fake_settings = type('', (), {
